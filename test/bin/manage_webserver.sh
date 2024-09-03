@@ -80,6 +80,83 @@ EOF
         -e "${IMAGEDIR}/nginx.log"
 }
 
+action_install() {
+    mkdir -p "${IMAGEDIR}"
+    
+    SERVICE="${IMAGEDIR}/image_webserver.service"
+    NGINX_CONFIG="${IMAGEDIR}/nginx.conf"
+    SERVERSCRIPT="${IMAGEDIR}/image_webserver.sh"
+    
+    cat > "${SERVICE}" <<EOF
+[Unit]
+Description=Nginx file-server service for the images used by VMs running test scenarios.
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=1
+User=microshift
+ExecStart=/usr/bin/bash ${SERVERSCRIPT}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > "${NGINX_CONFIG}" <<EOF
+worker_processes 32;
+events {
+}
+http {
+    access_log /dev/null;
+    error_log  ${IMAGEDIR}/nginx_error.log;
+    server {
+        listen ${WEB_SERVER_PORT};
+        listen [::]:${WEB_SERVER_PORT};
+        root   ${IMAGEDIR};
+        autoindex on;
+    }
+
+    # Timeout during which a keep-alive client connection will stay open on the server
+    # Default: 75s
+    keepalive_timeout 300s;
+
+    # Timeout for transmitting a response to the client
+    # Default: 60s
+    send_timeout 300s;
+
+    # Buffers used for reading response from a disk
+    # Default: 2 32k
+    output_buffers 2 1m;
+}
+pid ${IMAGEDIR}/nginx.pid;
+daemon off;
+EOF
+
+    cat > "${SERVERSCRIPT}" <<EOF
+#!/bin/bash
+
+nginx \
+    -c "${NGINX_CONFIG}" \
+    -e "${IMAGEDIR}/nginx.log"
+
+EOF
+    sudo chmod +x ${SERVERSCRIPT}
+    sudo cp "${SERVICE}" /etc/systemd/system/image_webserver.service
+
+    sudo systemctl start image_webserver.service
+    sudo systemctl enable image_webserver.service
+
+}
+
+action_uninstall() {
+    sudo systemctl stop image_webserver.service
+    sudo systemctl disable image_webserver.service
+    sudo rm /etc/systemd/system/image_webserver.service
+    #sudo rm /etc/systemd/system/multi-user.target.wants/image_webserver.service
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed
+}
+
 if [ $# -eq 0 ]; then
     usage
     exit 1
@@ -88,7 +165,7 @@ action="${1}"
 shift
 
 case "${action}" in
-    start|stop)
+    start|stop|install|uninstall)
         "action_${action}" "$@"
         ;;
     -h)
