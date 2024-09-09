@@ -87,21 +87,6 @@ action_install() {
     NGINX_CONFIG="${IMAGEDIR}/nginx.conf"
     SERVERSCRIPT="${IMAGEDIR}/image_webserver.sh"
     
-    cat > "${SERVICE}" <<EOF
-[Unit]
-Description=Nginx file-server service for the images used by VMs running test scenarios.
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=1
-User=microshift
-ExecStart=/usr/bin/bash ${SERVERSCRIPT}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
     cat > "${NGINX_CONFIG}" <<EOF
 worker_processes 32;
 events {
@@ -132,6 +117,21 @@ pid ${IMAGEDIR}/nginx.pid;
 daemon off;
 EOF
 
+    cat > "${SERVICE}" <<EOF
+[Unit]
+Description=Nginx file-server service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=1
+User=microshift
+ExecStart=nginx -c "${NGINX_CONFIG}" -e "${IMAGEDIR}/nginx.log"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     cat > "${SERVERSCRIPT}" <<EOF
 #!/bin/bash
 
@@ -140,11 +140,14 @@ nginx \
     -e "${IMAGEDIR}/nginx.log"
 
 EOF
+
     sudo chmod +x ${SERVERSCRIPT}
     sudo cp "${SERVICE}" /etc/systemd/system/image_webserver.service
 
     sudo systemctl start image_webserver.service
     sudo systemctl enable image_webserver.service
+
+    # TODO add cleanup
 
 }
 
