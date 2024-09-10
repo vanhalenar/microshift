@@ -280,31 +280,31 @@ The steps in this section need to be executed on a `development host`.
 
 The upgrade and rollback test scenarios use multiple builds of
 MicroShift to create images with different versions. Use
-`./test/bin/build_rpms.sh` to build all of the necessary packages.
-
-#### Creating Local RPM Repositories
-
-After building RPMs, run `./test/bin/create_local_repo.sh` to copy the
-necessary files into locations that can be used as RPM repositories by
-Image Builder.
+`./test/bin/build_rpms.sh` to build all of the necessary packages and
+copy the necessary files into locations that can be used as RPM repositories
+by Image Builder.
 
 #### Creating Images
 
-Use `./test/bin/start_osbuild_workers.sh` to create multiple workers for
-building images in parallel. The image build process is mostly CPU and I/O
-intensive. For a development environment, setting the number of workers to
-half of the CPU number may be a good starting point.
+Use `./test/bin/manage_composer_config.sh` to set up the system for building
+images. Create the configuration and start the webserver using `create`.
 
 ```
-NCPUS=$(lscpu | grep '^CPU(s):' | awk '{print $2}')
-./test/bin/start_osbuild_workers.sh $((NCPUS / 2))
+$ ./test/bin/manage_composer_config.sh create
+```
+
+Optionally, use `create-workers [num_workers]` to create multiple workers for building 
+images in parallel. The image build process is mostly CPU and I/O
+intensive. For a development environment, setting the number of workers to
+half of the CPU number may be a good starting point. If no `num_workers` is set, the script
+determines the ideal number of workers based on the number of CPU cores available.
+
+```
+$ ./test/bin/manage_composer_config.sh create-workers
 ```
 
 > This setting is optional and not necessarily recommended for configurations
 > with small number of CPUs and limited disk performance.
-
-Use `./test/bin/start_webserver.sh` to run an `nginx` web server to serve the
-images needed for the build.
 
 Use `./test/bin/build_images.sh` to build all of the images for all of the
 blueprints available.
@@ -316,14 +316,6 @@ images that use RPMs created from source (not already published releases).
 ```
 ./test/bin/build_images.sh -s
 ```
-
-#### Rebuilding from Sources Easily
-
-If you build new RPMs, you need to re-run several steps (build the
-RPMs, build the local repos, build the images, download the images).
-Use `./bin/rebuild_source_images.sh` to automate all of those
-steps with one script while only rebuilding the images that use RPMs
-created from source (not already published releases).
 
 ### Configuring Test Scenarios
 
@@ -367,9 +359,6 @@ The test scenario tool uses several global settings that may be
 configured before the tool is used in `./test/scenario_settings.sh`.
 You can copy `./test/scenario_settings.sh.example` as a starting point.
 
-`PUBLIC_IP` -- The public IP of the hypervisor, when accessing VMs
-remotely through port-forwarded connections.
-
 `SSH_PUBLIC_KEY` -- The name of the public key file to use for
 providing password-less access to the VMs.
 
@@ -401,6 +390,7 @@ hypervisor settings:
 - Firewall
 - Storage pools used for VM images and disks
 - Isolated networks
+- Nginx webserver for serving images used in scenarios
 
 Create the necessary configuration using `create`.
 
@@ -420,9 +410,6 @@ $ ./test/bin/manage_hypervisor_config.sh cleanup
 > ```
 
 #### Creating Test Infrastructure
-
-Use `./test/bin/start_webserver.sh` to run an `nginx` web server to serve the
-images needed for the test scenarios.
 
 Use `./test/bin/scenario.sh` to create test infrastructure for a scenario
 with the `create` argument and a scenario directory name as input.

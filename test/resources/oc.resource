@@ -60,6 +60,13 @@ Oc Exec
     ${output}=    Run With Kubeconfig    oc exec -n ${ns} pod/${pod} -- /bin/bash -c '${cmd}'
     RETURN    ${output}
 
+Oc Wait
+    [Documentation]    Run 'oc wait' on a specific resource in the current test namespace
+    ...    Returns the combined STDOUT/STDERR output of the command.
+    [Arguments]    ${opts}
+    ${output}=    Run With Kubeconfig    oc wait ${opts}
+    RETURN    ${output}
+
 Named Pod Should Be Ready
     [Documentation]    Wait for pod with name \${name} to become "Ready"
     ...    ${name}    Name of pod to wait for
@@ -92,6 +99,15 @@ Named Deployment Should Be Available
     ...    ${timeout}    Period of time to wait for deployment to reach ready status. Default 60s.
     [Arguments]    ${name}    ${ns}=${NAMESPACE}    ${timeout}=${DEFAULT_WAIT_TIMEOUT}
     Run With Kubeconfig    oc wait -n ${ns} deploy ${name} --for=condition=Available --timeout=${timeout}
+
+Named Daemonset Should Be Available
+    [Documentation]    Wait for a given daemonset's Available condition to be true
+    ...    ${name}    Name of daemonset to wait for
+    ...    ${ns}    Namespace of named daemonset. Defaults to NAMESPACE suite variable
+    ...    ${timeout}    Period of time to wait for daemonset to reach ready status. Default 60s.
+    [Arguments]    ${name}    ${ns}=${NAMESPACE}    ${timeout}=${DEFAULT_WAIT_TIMEOUT}
+    Run With Kubeconfig
+    ...    oc wait -n ${ns} daemonset ${name} --for=jsonpath='{.status.numberAvailable}'=1 --timeout=${timeout}
 
 Named PVC Should Be Resized
     [Documentation]    Wait for pvc with ${name} to resize to ${to_size}

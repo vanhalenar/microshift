@@ -21,6 +21,7 @@ spec:
   sessionAffinity: None
   selector:
     ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
+  ipFamilyPolicy: '{{.IPFamily}}'
 metadata:
   labels:
     ingresscontroller.operator.openshift.io/owning-ingresscontroller: default

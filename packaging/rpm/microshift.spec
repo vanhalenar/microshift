@@ -62,7 +62,7 @@ BuildRequires: golang
 # DO NOT REMOVE
 
 Requires: cri-o >= 1.30.0, cri-o < 1.31.0
-Requires: cri-tools >= 1.30.0, cri-tools < 1.31.0
+Requires: cri-tools >= 1.31.0, cri-tools < 1.32.0
 Requires: iptables
 Requires: microshift-selinux = %{version}
 Requires: microshift-networking = %{version}
@@ -109,7 +109,7 @@ The microshift-selinux package provides the SELinux policy modules required by M
 Summary: Networking components for MicroShift
 Requires: microshift = %{version}
 Obsoletes: openvswitch3.1 < 3.3
-Requires: (openvswitch3.3 or openvswitch >= 3.3)
+Requires: (openvswitch3.4 or openvswitch >= 3.4)
 Requires: NetworkManager
 Requires: NetworkManager-ovs
 Requires: jq
@@ -122,6 +122,7 @@ Summary: Greenboot components for MicroShift
 BuildArch: noarch
 Requires: microshift = %{version}
 Requires: greenboot
+Requires: python3-pyyaml
 
 %description greenboot
 The microshift-greenboot package provides the Greenboot scripts used for verifying that MicroShift is up and running.
@@ -162,6 +163,17 @@ Requires: microshift-release-info = %{version}
 The microshift-multus-release-info package provides release information files for this
 release. These files contain the list of container image references used by
 the Multus CNI for MicroShift and can be used to embed those images into osbuilder blueprints.
+
+%package low-latency
+Summary: Baseline configuration for running low latency workload on MicroShift
+BuildArch: noarch
+Requires: microshift = %{version}
+Requires: tuned-profiles-cpu-partitioning
+Requires: python3-pyyaml
+
+%description low-latency
+The microshift-low-latency package provides a baseline configuration prepared for
+running low latency workloads on MicroShift.
 
 %prep
 # Dynamic detection of the available golang version also works for non-RPM golang packages
@@ -251,6 +263,7 @@ install -p -m644 packaging/systemd/microshift.service %{buildroot}%{_unitdir}/mi
 install -d -m755 %{buildroot}/%{_sysconfdir}/microshift
 install -d -m755 %{buildroot}/%{_sysconfdir}/microshift/manifests
 install -d -m755 %{buildroot}/%{_sysconfdir}/microshift/manifests.d
+install -d -m755 %{buildroot}/%{_sysconfdir}/microshift/config.d
 install -p -m644 packaging/microshift/config.yaml %{buildroot}%{_sysconfdir}/microshift/config.yaml.default
 install -p -m644 packaging/microshift/lvmd.yaml %{buildroot}%{_sysconfdir}/microshift/lvmd.yaml.default
 install -p -m644 packaging/microshift/ovn.yaml %{buildroot}%{_sysconfdir}/microshift/ovn.yaml.default
@@ -345,6 +358,26 @@ cat assets/optional/multus/kustomization.x86_64.yaml >> %{buildroot}/%{_prefix}/
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
 install -p -m644 assets/optional/multus/release-multus-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release/
 
+# cleanup kubelet
+install -p -m644 packaging/tuned/microshift-cleanup-kubelet.service %{buildroot}%{_unitdir}/microshift-cleanup-kubelet.service
+
+# low-latency
+install -d -m755 %{buildroot}/%{_prefix}/lib/tuned/microshift-baseline
+install -p -m644 packaging/tuned/profile/tuned.conf %{buildroot}/%{_prefix}/lib/tuned/microshift-baseline/tuned.conf
+install -p -m755 packaging/tuned/profile/script.sh %{buildroot}/%{_prefix}/lib/tuned/microshift-baseline/script.sh
+install -d -m755 %{buildroot}%{_sysconfdir}/tuned
+install -p -m644 packaging/tuned/profile/variables.conf %{buildroot}%{_sysconfdir}/tuned/microshift-baseline-variables.conf
+
+## low-latency: crio runtime & manifests to install runtime-class
+install -p -m644 packaging/crio.conf.d/05-high-performance-runtime.conf %{buildroot}%{_sysconfdir}/crio/crio.conf.d/05-high-performance-runtime.conf
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests.d/002-microshift-low-latency
+install -p -m644 packaging/tuned/runtime-class/runtime-class.yaml %{buildroot}/%{_prefix}/lib/microshift/manifests.d/002-microshift-low-latency/runtime-class.yaml
+install -p -m644 packaging/tuned/runtime-class/kustomization.yaml %{buildroot}/%{_prefix}/lib/microshift/manifests.d/002-microshift-low-latency/kustomization.yaml
+
+## low-latency: microshift-tuned
+install -p -m644 packaging/tuned/microshift-tuned.service %{buildroot}%{_unitdir}/microshift-tuned.service
+install -p -m755 packaging/tuned/microshift-tuned.py %{buildroot}%{_bindir}/microshift-tuned
+
 %pre networking
 
 getent group hugetlbfs >/dev/null || groupadd -r hugetlbfs
@@ -409,10 +442,12 @@ fi
 %{_bindir}/microshift-cleanup-data
 %{_bindir}/microshift-sos-report
 %{_unitdir}/microshift.service
+%{_unitdir}/microshift-cleanup-kubelet.service
 %{_sysconfdir}/crio/crio.conf.d/00-crio-crun.conf
 %{_sysconfdir}/crio/crio.conf.d/10-microshift.conf
 %{_datadir}/microshift/spec/config-openapi-spec.json
 %dir %{_sysconfdir}/microshift
+%dir %{_sysconfdir}/microshift/config.d
 %dir %{_sysconfdir}/microshift/manifests
 %dir %{_sysconfdir}/microshift/manifests.d
 %config(noreplace) %{_sysconfdir}/microshift/config.yaml.default
@@ -474,10 +509,36 @@ fi
 %files multus-release-info
 %{_datadir}/microshift/release/release-multus-{x86_64,aarch64}.json
 
+%files low-latency
+%{_prefix}/lib/tuned/microshift-baseline
+%config(noreplace) %{_sysconfdir}/tuned/microshift-baseline-variables.conf
+%{_sysconfdir}/crio/crio.conf.d/05-high-performance-runtime.conf
+%{_prefix}/lib/microshift/manifests.d/002-microshift-low-latency/
+%{_unitdir}/microshift-tuned.service
+%{_bindir}/microshift-tuned
+
 
 # Use Git command to generate the log and replace the VERSION string
 # LANG=C git log --date="format:%a %b %d %Y" --pretty="tformat:* %cd %an <%ae> VERSION%n- %s%n" packaging/rpm/microshift.spec
 %changelog
+* Fri Aug 30 2024 Patryk Matuszak <pmatusza@redhat.com> 4.18.0
+- Support for config drop-in directory
+
+* Mon Aug 26 2024 Nadia Pinaeva <n.m.pinaeva@gmail.com> 4.17.0
+- Update openvswitch to 3.4
+
+* Mon Jul 29 2024 Patryk Matuszak <pmatusza@redhat.com> 4.17.0
+- Add microshift-tuned daemon for unattended TuneD profile activation
+
+* Thu Jul 18 2024 Patryk Matuszak <pmatusza@redhat.com> 4.17.0
+- Add high-performance CRI-O runtime and RuntimeClass
+
+* Thu Jul 18 2024 Patryk Matuszak <pmatusza@redhat.com> 4.17.0
+- Add microshift-baseline TuneD profile
+
+* Thu Jul 18 2024 Patryk Matuszak <pmatusza@redhat.com> 4.17.0
+- Add service to cleanup stale kubelet files on boot
+
 * Mon Jul 08 2024 Pablo Acevedo Montserrat <pacevedo@redhat.com> 4.17.0
 - Add NM configuration file
 

@@ -29,9 +29,9 @@ BASE_REPO = common.get_env_var('BASE_REPO')
 NEXT_REPO = common.get_env_var('NEXT_REPO')
 HOME_DIR = common.get_env_var("HOME")
 PULL_SECRET = common.get_env_var('PULL_SECRET', f"{HOME_DIR}/.pull-secret.json")
-# Switch to registry.redhat.io/rhel9/bootc-image-builder:9.4 when all the
-# required features are supported
-BIB_IMAGE = "quay.io/centos-bootc/bootc-image-builder:latest"
+# Switch to quay.io/centos-bootc/bootc-image-builder:latest if any new upstream
+# features are required
+BIB_IMAGE = "registry.redhat.io/rhel9/bootc-image-builder:latest"
 GOMPLATE = common.get_env_var('GOMPLATE')
 FORCE_REBUILD = False
 
@@ -132,8 +132,8 @@ def set_rpm_version_info_vars():
     release_info_rpm = find_latest_rpm(LOCAL_REPO)
     release_info_rpm_base = find_latest_rpm(BASE_REPO)
 
-    SOURCE_VERSION = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}' {release_info_rpm}")
-    SOURCE_VERSION_BASE = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}' {release_info_rpm_base}")
+    SOURCE_VERSION = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm}")
+    SOURCE_VERSION_BASE = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm_base}")
 
     # Update the source version environment variables based on the global variables.
     # These are used for templating container files and images.
@@ -193,8 +193,6 @@ def extract_container_images(version, repo_spec, outfile, dry_run=False):
 
 
 def run_template_cmd(ifile, ofile, dry_run):
-    # Remove the .template suffix from the output file
-    ofile = ofile.removesuffix(".template")
     # Run the templating command
     gomplate_args = [
         GOMPLATE,
@@ -204,23 +202,18 @@ def run_template_cmd(ifile, ofile, dry_run):
     common.run_command_in_shell(gomplate_args, dry_run)
 
 
-def process_template_dir(idir, odir, dry_run):
-    # Create the output directory
-    os.makedirs(odir, exist_ok=True)
-    # Process the input directory running templating on the files
-    # and copying them to the output directory
-    for file in os.listdir(idir):
-        ifile = os.path.join(idir, file)
-        ofile = os.path.join(odir, common.basename(ifile))
-        run_template_cmd(ifile, ofile, dry_run)
+def get_process_file_names(idir, ifile, obasedir):
+    path = os.path.join(idir, ifile)
+    outname = os.path.splitext(ifile)[0]
+    outdir = os.path.join(obasedir, outname)
+    logfile = os.path.join(obasedir, f"{outname}.log")
+    return path, outname, outdir, logfile
 
 
 def process_containerfile(groupdir, containerfile, dry_run):
-    cf_path = os.path.join(groupdir, containerfile)
-    cf_outname = os.path.splitext(containerfile)[0]
-    cf_outdir = os.path.join(BOOTC_IMAGE_DIR, cf_outname)
-    cf_logfile = os.path.join(BOOTC_IMAGE_DIR, f"{cf_outname}.log")
-    cf_targetimg = os.path.join(cf_outdir, "index.json")
+    cf_path, cf_outname, cf_outdir, cf_logfile = get_process_file_names(
+        groupdir, containerfile, BOOTC_IMAGE_DIR)
+    cf_targetimg = os.path.join(cf_outdir, "manifest.json")
 
     # Check if the target artifact exists
     if should_skip(cf_targetimg):
@@ -229,6 +222,9 @@ def process_containerfile(groupdir, containerfile, dry_run):
 
     # Create the output directories
     os.makedirs(cf_outdir, exist_ok=True)
+    # Run template command on the input file
+    cf_outfile = os.path.join(BOOTC_IMAGE_DIR, containerfile)
+    run_template_cmd(cf_path, cf_outfile, dry_run)
 
     common.print_msg(f"Processing {containerfile} with logs in {cf_logfile}")
     try:
@@ -238,7 +234,7 @@ def process_containerfile(groupdir, containerfile, dry_run):
             build_args = [
                 "sudo", "podman", "build",
                 "--authfile", PULL_SECRET,
-                "-t", cf_outname, "-f", cf_path,
+                "-t", cf_outname, "-f", cf_outfile,
                 IMAGEDIR
             ]
             common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
@@ -271,10 +267,8 @@ def process_containerfile(groupdir, containerfile, dry_run):
 
 
 def process_image_bootc(groupdir, bootcfile, dry_run):
-    bf_path = os.path.join(groupdir, bootcfile)
-    bf_outname = os.path.splitext(bootcfile)[0]
-    bf_outdir = os.path.join(BOOTC_ISO_DIR, bf_outname)
-    bf_logfile = os.path.join(BOOTC_ISO_DIR, f"{bf_outname}.log")
+    bf_path, bf_outname, bf_outdir, bf_logfile = get_process_file_names(
+        groupdir, bootcfile, BOOTC_ISO_DIR)
     bf_targetiso = os.path.join(VM_DISK_BASEDIR, f"{bf_outname}.iso")
 
     # Check if the target artifact exists
@@ -285,6 +279,9 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
     # Create the output directories
     os.makedirs(bf_outdir, exist_ok=True)
     os.makedirs(VM_DISK_BASEDIR, exist_ok=True)
+    # Run template command on the input file
+    bf_outfile = os.path.join(BOOTC_IMAGE_DIR, bootcfile)
+    run_template_cmd(bf_path, bf_outfile, dry_run)
 
     common.print_msg(f"Processing {bootcfile} with logs in {bf_logfile}")
     try:
@@ -300,7 +297,7 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
             common.record_junit(bf_path, "pull-bootc-bib", "OK")
 
             # Read the image reference
-            bf_imgref = common.read_file(bf_path).strip()
+            bf_imgref = common.read_file(bf_outfile).strip()
 
             # If not already local, download the image to be used by bootc image builder
             if not bf_imgref.startswith('localhost/'):
@@ -346,11 +343,118 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
         os.rename(f"{bf_outdir}/bootiso/install.iso", bf_targetiso)
 
 
+def process_container_encapsulate(groupdir, containerfile, dry_run):
+    ce_path, ce_outname, ce_outdir, ce_logfile = get_process_file_names(
+        groupdir, containerfile, BOOTC_IMAGE_DIR)
+    ce_targetimg = os.path.join(ce_outdir, "manifest.json")
+    ce_tagname = "build_image_tag"
+    ce_tagval = f"localhost/{ce_outname}:latest"
+
+    def get_images_by_label():
+        images_args = [
+            "sudo", "podman", "images",
+            "--filter", f"label={ce_tagname}={ce_tagval}",
+            "--format", "{{.ID}}"
+        ]
+        imgids = common.run_command_in_shell(images_args, dry_run)
+        # Make sure the ids are normalized in a single line
+        return re.sub(r'\s+', ' ', imgids)
+
+    # Check if the target artifact exists
+    if should_skip(ce_targetimg):
+        common.record_junit(ce_path, "process-container-encapsulate", "SKIPPED")
+        return
+
+    # Create the output directories
+    os.makedirs(ce_outdir, exist_ok=True)
+    # Run template command on the input file
+    ce_outfile = os.path.join(BOOTC_IMAGE_DIR, containerfile)
+    run_template_cmd(ce_path, ce_outfile, dry_run)
+
+    common.print_msg(f"Processing {containerfile} with logs in {ce_logfile}")
+    try:
+        # Redirect the output to the log file
+        with open(ce_logfile, 'w') as logfile:
+            # Read the image reference
+            ce_imgref = common.read_file(ce_outfile).strip()
+
+            # Run the container image build command, also adding a label
+            # to the generated image
+            build_args = [
+                "sudo", "rpm-ostree", "compose",
+                "container-encapsulate",
+                "--label", f"{ce_tagname}={ce_tagval}",
+                "--repo", os.path.join(IMAGEDIR, "repo"),
+                ce_imgref,
+                f"dir:{ce_outdir}"
+            ]
+            common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
+            common.record_junit(ce_path, "build-container", "OK")
+
+            # Fix the directory ownership
+            if not dry_run:
+                common.run_command(
+                    ["sudo", "chown", "-R", f"{getpass.getuser()}.", ce_outdir],
+                    dry_run)
+                common.record_junit(ce_path, "chown-container", "OK")
+
+            # Cleanup previously loaded images if any
+            imgids = get_images_by_label()
+            if imgids:
+                clean_args = [
+                    "sudo", "podman",
+                    "rmi", "-f", imgids
+                ]
+                common.run_command_in_shell(clean_args, dry_run, logfile, logfile)
+                common.record_junit(ce_path, "cleanup-image", "OK")
+
+            # Run the container import command, which might be necessary for
+            # subsequent builds that depend on this container image
+            load_args = [
+                "sudo", "podman", "load",
+                "-i", ce_outdir
+            ]
+            common.run_command_in_shell(load_args, dry_run, logfile, logfile)
+            common.record_junit(ce_path, "load-image", "OK")
+
+            # Get the loaded image ID
+            imgid = get_images_by_label()
+            if not imgid and not dry_run:
+                raise Exception(f"Failed to find image ID for {ce_tagname}={ce_tagval} label")
+
+            # Tag the loaded image
+            tag_args = [
+                "sudo", "podman", "tag",
+                imgid, ce_tagval
+            ]
+            common.run_command_in_shell(tag_args, dry_run, logfile, logfile)
+            common.record_junit(ce_path, "tag-image", "OK")
+    except Exception:
+        common.record_junit(ce_path, "process-container-encapsulate", "FAILED")
+        # Propagate the exception to the caller
+        raise
+    finally:
+        # Always display the command logs with the prefix on each line
+        common.run_command(["sed", f"s/^/{ce_outname}: /", ce_logfile], dry_run)
+
+
 def process_group(groupdir, build_type, dry_run=False):
     futures = []
     try:
         # Open the junit file
         common.start_junit(groupdir)
+        # Process all the template files in the current group directory
+        # before starting the parallel processing
+        for ifile in os.listdir(groupdir):
+            if not ifile.endswith(".template"):
+                continue
+            # Create full path for output and input file names
+            ofile = os.path.join(BOOTC_IMAGE_DIR, ifile)
+            ifile = os.path.join(groupdir, ifile)
+            # Strip the .template suffix from the output file name
+            ofile = ofile.removesuffix(".template")
+            run_template_cmd(ifile, ofile, dry_run)
+
         # Parallel processing loop
         with concurrent.futures.ProcessPoolExecutor() as executor:
             # Scan group directory contents sorted by length and then alphabetically
@@ -365,7 +469,12 @@ def process_group(groupdir, build_type, dry_run=False):
                         common.print_msg(f"Skipping '{file}' due to '{build_type}' filter")
                         continue
                     futures.append(executor.submit(process_image_bootc, groupdir, file, dry_run))
-                else:
+                elif file.endswith(".container-encapsulate"):
+                    if build_type and build_type != "container-encapsulate":
+                        common.print_msg(f"Skipping '{file}' due to '{build_type}' filter")
+                        continue
+                    futures.append(executor.submit(process_container_encapsulate, groupdir, file, dry_run))
+                elif not file.endswith(".template"):
                     common.print_msg(f"Skipping unknown file {file}")
 
         # Wait for the parallel tasks to complete
@@ -392,7 +501,9 @@ def main():
     parser.add_argument("-d", "--dry-run", action="store_true", help="Dry run: skip executing build commands.")
     parser.add_argument("-f", "--force-rebuild", action="store_true", help="Force rebuilding images that already exist.")
     parser.add_argument("-E", "--no-extract-images", action="store_true", help="Skip container image extraction.")
-    parser.add_argument("-b", "--build-type", choices=["image-bootc", "containerfile"], help="Only build images of the specified type.")
+    parser.add_argument("-b", "--build-type",
+                        choices=["image-bootc", "containerfile", "container-encapsulate"],
+                        help="Only build images of the specified type.")
     dirgroup = parser.add_mutually_exclusive_group(required=True)
     dirgroup.add_argument("-l", "--layer-dir", type=str, help="Path to the layer directory to process.")
     dirgroup.add_argument("-g", "--group-dir", type=str, help="Path to the group directory to process.")
@@ -437,12 +548,6 @@ def main():
             extract_container_images(f"4.{FAKE_NEXT_MINOR_VERSION}.*", NEXT_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(PREVIOUS_RELEASE_VERSION, PREVIOUS_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(YMINUS2_RELEASE_VERSION, YMINUS2_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
-
-        # Process template files
-        process_template_dir(
-            os.path.join(SCRIPTDIR, "../bootc-sources"),
-            os.path.join(IMAGEDIR, "bootc-sources"),
-            args.dry_run)
         # Process individual group directory
         if args.group_dir:
             process_group(args.group_dir, args.build_type, args.dry_run)

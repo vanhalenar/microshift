@@ -22,7 +22,6 @@ WEB_SERVER_URL="http://${VM_BRIDGE_IP}:${WEB_SERVER_PORT}"
 BOOTC_REGISTRY_URL="${VM_BRIDGE_IP}:5000"
 PULL_SECRET="${PULL_SECRET:-${HOME}/.pull-secret.json}"
 PULL_SECRET_CONTENT="$(jq -c . "${PULL_SECRET}")"
-PUBLIC_IP=${PUBLIC_IP:-""}  # may be overridden in global settings file
 VM_BOOT_TIMEOUT=1200 # Overall total boot times are around 15m
 VM_GREENBOOT_TIMEOUT=1800 # Greenboot readiness may take up to 15-30m depending on the load
 ENABLE_REGISTRY_MIRROR=${ENABLE_REGISTRY_MIRROR:-false}
@@ -36,6 +35,32 @@ SUBSCRIPTION_MANAGER_PLUGIN="${SUBSCRIPTION_MANAGER_PLUGIN:-${SCRIPTDIR}/subscri
 full_vm_name() {
     local base="${1}"
     echo "${SCENARIO//@/-}-${base}"
+}
+
+# hostname validation
+# based on https://github.com/rhinstaller/anaconda/blob/c95142f76735a2e9ae6d845f8569d46632ddd619/pyanaconda/network.py#L96-L120
+validate_vm_hostname() {
+    local vm_name="$1"
+
+    if [ -z "${vm_name}" ]; then
+        error "VM hostname cannot be empty string"
+        record_junit "${vm_name}" "vm_hostname_validation" "FAILED"
+        exit 1
+    fi
+
+    if [ ${#vm_name} -gt 64 ]; then
+        error "VM hostname is too long"
+        record_junit "${vm_name}" "vm_hostname_validation" "FAILED"
+        exit 1
+    fi
+
+    if ! echo "${vm_name}" | grep -E '^([a-zA-Z0-9]+-*[a-zA-Z0-9]+)+$|^[a-zA-Z0-9]+$' > /dev/null; then
+        error "VM hostname is invalid"
+        record_junit "${vm_name}" "vm_hostname_validation" "FAILED"
+        exit 1
+    fi
+
+    record_junit "${vm_name}" "vm_hostname_validation" "OK"
 }
 
 vm_property_filename() {
@@ -227,6 +252,8 @@ prepare_kickstart() {
     local -r vm_hostname="${full_vmname/./-}"
     local -r hostname=$(hostname)
 
+    validate_vm_hostname "${vm_hostname}"
+
     echo "Preparing kickstart file ${template} at ${output_dir}"
     if [ ! -f "${KICKSTART_TEMPLATE_DIR}/${template}" ]; then
         error "No ${template} in ${KICKSTART_TEMPLATE_DIR}"
@@ -253,10 +280,10 @@ prepare_kickstart() {
             -e "s|REPLACE_PULL_SECRET|${PULL_SECRET_CONTENT}|g" \
             -e "s|REPLACE_HOST_NAME|${vm_hostname}|g" \
             -e "s|REPLACE_REDHAT_AUTHORIZED_KEYS|${REDHAT_AUTHORIZED_KEYS}|g" \
-            -e "s|REPLACE_PUBLIC_IP|${PUBLIC_IP}|g" \
             -e "s|REPLACE_FIPS_ENABLED|${fips_enabled}|g" \
             -e "s|REPLACE_ENABLE_MIRROR|${ENABLE_REGISTRY_MIRROR}|g" \
             -e "s|REPLACE_MIRROR_HOSTNAME|${hostname}|g" \
+            -e "s|REPLACE_VM_BRIDGE_IP|${VM_BRIDGE_IP}|g" \
             "${ifile}" > "${output_file}"
     done
     record_junit "${vmname}" "prepare_kickstart" "OK"
@@ -485,6 +512,17 @@ launch_vm() {
         ;;
     esac
 
+    # Attach the graphical console if specified in the scenario settings
+    local graphics_args
+    graphics_args="none"
+    if "${VNC_CONSOLE}"; then
+        graphics_args="vnc,listen=0.0.0.0"
+    else
+        # The inst.cmdline mode does not allow any interaction and it ensures
+        # that %onerror kickstart handlers are executed on failure
+        vm_extra_args+=" inst.cmdline"
+    fi
+
     for _ in $(seq "${vm_nics}") ; do
         vm_network_args+="--network network=${network_name},model=virtio "
     done
@@ -515,12 +553,6 @@ launch_vm() {
     local attempt=1
     local max_attempts=2
     while true ; do
-        local graphics_args
-        graphics_args="none"
-        if "${VNC_CONSOLE}"; then
-            graphics_args="vnc,listen=0.0.0.0"
-        fi
-
         # Make sure the virt-install command times out after a predefined period.
         # The 'timeout' command sends the HUP signal and, if the process does not
         # exit after 1m, it sends the KILL signal to terminate the process.
@@ -602,20 +634,13 @@ launch_vm() {
         # Record the IP of this VM so our caller can use it to configure
         # port forwarding and the firewall.
         set_vm_property "${vmname}" "ip" "${ip}"
-        # Record the _public_ IP of the VM so the test suite can use it to
-        # access the host. This is useful when the public IP is the
-        # hypervisor forwarding connections. If we have no PUBLIC_IP, use
-        # the VM IP and assume a local connection.
-        if [ -n "${PUBLIC_IP}" ]; then
-            set_vm_property "${vmname}" "public_ip" "${PUBLIC_IP}"
-        else
-            set_vm_property "${vmname}" "public_ip" "${ip}"
-            # Set the defaults for the various ports so that connections
-            # from the hypervisor to the VM work.
-            set_vm_property "${vmname}" "ssh_port" "22"
-            set_vm_property "${vmname}" "api_port" "6443"
-            set_vm_property "${vmname}" "lb_port" "5678"
-        fi
+        
+        # Set the defaults for the various ports so that connections
+        # from the hypervisor to the VM work.
+        set_vm_property "${vmname}" "ssh_port" "22"
+        set_vm_property "${vmname}" "api_port" "6443"
+        set_vm_property "${vmname}" "lb_port" "5678"
+        
 
         if wait_for_ssh "${ip}"; then
             record_junit "${vmname}" "ssh-access" "OK"
@@ -646,7 +671,10 @@ remove_vm() {
     # Remove the actual VM
     if sudo virsh dumpxml "${full_vmname}" >/dev/null; then
         if ! sudo virsh dominfo "${full_vmname}" | grep '^State' | grep -q 'shut off'; then
-            sudo virsh destroy "${full_vmname}"
+            sudo virsh destroy --graceful "${full_vmname}" || true
+        fi
+        if ! sudo virsh dominfo "${full_vmname}" | grep '^State' | grep -q 'shut off'; then
+            sudo virsh destroy "${full_vmname}" || true
         fi
         sudo virsh undefine --nvram "${full_vmname}"
     fi
@@ -713,7 +741,7 @@ local_rpm_version() {
         error "Failed to find microshift-release-info RPM in ${LOCAL_REPO}"
         exit 1
     fi
-    rpm -q --queryformat '%{version}' "${release_info_rpm}" 2>/dev/null
+    rpm -q --queryformat '%{version}-%{release}' "${release_info_rpm}" 2>/dev/null
 }
 
 # Public function to enable or disable a Stress Condition
@@ -733,7 +761,7 @@ stress_testing() {
     local -r condition="${3}"
     local -r value="${4}"
 
-    local -r ssh_host="$(get_vm_property "${vmname}" public_ip)"
+    local -r ssh_host="$(get_vm_property "${vmname}" ip)"
     local -r ssh_user=redhat
     local -r ssh_port="$(get_vm_property "${vmname}" ssh_port)"
     local -r ssh_pkey="${SSH_PRIVATE_KEY:-}"
@@ -790,7 +818,7 @@ run_tests() {
 
     local variable_file
     if [ "${test_is_online}" == "true" ]; then
-        for p in "ssh_port" "api_port" "lb_port" "public_ip" "ip"; do
+        for p in "ssh_port" "api_port" "lb_port" "ip"; do
             f="$(vm_property_filename "${vmname}" "${p}")"
             if [ ! -f "${f}" ]; then
                 error "Cannot read ${f}"
@@ -802,7 +830,6 @@ run_tests() {
         local -r ssh_port=$(get_vm_property "${vmname}" "ssh_port")
         local -r api_port=$(get_vm_property "${vmname}" "api_port")
         local -r lb_port=$(get_vm_property "${vmname}" "lb_port")
-        local -r public_ip=$(get_vm_property "${vmname}" "public_ip")
         local -r vm_ip=$(get_vm_property "${vmname}" "ip")
 
         local variable_file="${SCENARIO_INFO_DIR}/${SCENARIO}/variables.yaml"
@@ -812,7 +839,7 @@ run_tests() {
 VM_IP: ${vm_ip}
 API_PORT: ${api_port}
 LB_PORT: ${lb_port}
-USHIFT_HOST: ${public_ip}
+USHIFT_HOST: ${vm_ip}
 USHIFT_USER: redhat
 SSH_PRIV_KEY: "${SSH_PRIVATE_KEY:-}"
 SSH_PORT: ${ssh_port}

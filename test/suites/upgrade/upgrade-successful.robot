@@ -3,6 +3,7 @@ Documentation       Tests related to upgrading MicroShift
 
 Resource            ../../resources/common.resource
 Resource            ../../resources/ostree.resource
+Resource            ../../resources/oc.resource
 Resource            ../../resources/selinux.resource
 Library             Collections
 
@@ -13,7 +14,9 @@ Test Tags           ostree
 
 
 *** Variables ***
-${TARGET_REF}       ${EMPTY}
+${TARGET_REF}           ${EMPTY}
+
+${LVMS_TOPOLVM_DIFF}    ./assets/topolvm-to-lvms-diff.yaml
 
 
 *** Test Cases ***
@@ -36,6 +39,7 @@ Setup
     Check Required Env Variables
     Should Not Be Empty    ${TARGET_REF}    TARGET_REF variable is required
     Login MicroShift Host
+    Setup Kubeconfig
 
 Teardown
     [Documentation]    Test suite teardown

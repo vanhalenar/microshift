@@ -27,3 +27,4 @@ spec:
       port: {{ .RouterHttpsPort }}
       targetPort: https
   sessionAffinity: None
+  ipFamilyPolicy: '{{.IPFamily}}'

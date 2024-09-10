@@ -159,7 +159,6 @@ func TestGetActiveConfigFromYAML(t *testing.T) {
 				return c
 			}(),
 		},
-
 		{
 			name: "api-server-advertise-address",
 			config: dedent(`
@@ -371,12 +370,29 @@ func TestGetActiveConfigFromYAML(t *testing.T) {
 				}
 				return c
 			}(),
+		}, {
+			name: "storage",
+			config: dedent(`
+			storage:
+			  driver: "none"
+			  optionalCsiComponents:
+			  - "snapshot-controller" 
+			  - "snapshot-webhook"
+			`),
+			expected: func() *Config {
+				c := mkDefaultConfig()
+				c.Storage = Storage{
+					Driver:                CsiDriverNone,
+					OptionalCSIComponents: []OptionalCsiComponent{CsiComponentSnapshot, CsiComponentSnapshotWebhook},
+				}
+				return c
+			}(),
 		},
 	}
 
 	for _, tt := range ttests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := getActiveConfigFromYAML([]byte(tt.config))
+			config, err := getActiveConfigFromYAMLDropins([][]byte{[]byte(tt.config)})
 			// If we have any warnings, drop them. Use an empty array
 			// instead of nil so that we can differentiate between
 			// unexpected warnings (where we get an array instead of
@@ -402,6 +418,78 @@ func TestGetActiveConfigFromYAML(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("multiple-drop-ins", func(t *testing.T) {
+		dropins := [][]byte{
+			// Individual fields should be overwritten
+			[]byte(dedent(`
+            ingress:
+              ports:
+                http: 1234
+                https: 9876
+            `)),
+			[]byte(dedent(`
+            ingress:
+              ports:
+                http: 2345
+            `)),
+			[]byte(dedent(`
+            ingress:
+              ports:
+                https: 8765
+            `)),
+
+			// Arrays are overwritten completely (no addition)
+			[]byte(dedent(`
+            ingress:
+              listenAddress:
+                - eth1
+                - eth2
+            `)),
+			[]byte(dedent(`
+            ingress:
+              listenAddress:
+                - lo
+            `)),
+
+			// Even though kubelet is map[string]any, we want to merge individual settings
+			[]byte(dedent(`
+            kubelet:
+              cpuManagerPolicy: static
+              evictionHard:
+                imagefs.available: 15%
+                memory.available: 100Mi
+            `)),
+			[]byte(dedent(`
+            kubelet:
+              memoryManagerPolicy: Static
+              evictionHard:
+                nodefs.available: 10%
+                nodefs.inodesFree: 5%
+            `)),
+		}
+
+		expected := mkDefaultConfig()
+		expected.Ingress.Ports.Http = ptr.To[int](2345)
+		expected.Ingress.Ports.Https = ptr.To[int](8765)
+		expected.Ingress.ListenAddress = []string{"lo"}
+		expected.Kubelet = map[string]any{
+			"cpuManagerPolicy":    "static",
+			"memoryManagerPolicy": "Static",
+			"evictionHard": map[string]any{
+				"imagefs.available": "15%",
+				"memory.available":  "100Mi",
+				"nodefs.available":  "10%",
+				"nodefs.inodesFree": "5%",
+			},
+		}
+
+		config, err := getActiveConfigFromYAMLDropins(dropins)
+		assert.NoError(t, err)
+
+		config.userSettings = nil
+		assert.Equal(t, expected, config)
+	})
 }
 
 // Test the validation logic
@@ -659,7 +747,6 @@ func TestValidate(t *testing.T) {
 			}(),
 			expectErr: true,
 		},
-
 		{
 			name: "network-different-ip-family-advertise-address",
 			config: func() *Config {
@@ -667,6 +754,49 @@ func TestValidate(t *testing.T) {
 				c.Network.ServiceNetwork = []string{"fd06::/64"}
 				c.Network.ClusterNetwork = []string{"fd07::/64"}
 				c.ApiServer.AdvertiseAddress = "10.20.30.40"
+				return c
+			}(),
+			expectErr: true,
+		},
+		{
+			name: "node-ipv6-must-be-configured",
+			config: func() *Config {
+				c := mkDefaultConfig()
+				c.Network.ServiceNetwork = []string{"90.80.70.60/16", "fd08::/64"}
+				c.Network.ClusterNetwork = []string{"50.40.30.20/16", "fd09::/64"}
+				return c
+			}(),
+			expectErr: true,
+		},
+		{
+			name: "node-ipv6-must-not-be-configured",
+			config: func() *Config {
+				c := mkDefaultConfig()
+				c.Network.ServiceNetwork = []string{"91.81.71.61/16"}
+				c.Network.ClusterNetwork = []string{"51.41.31.21/16"}
+				c.Node.NodeIPV6 = "2001:db0:ff::1"
+				return c
+			}(),
+			expectErr: true,
+		},
+		{
+			name: "node-ipv6-bad-format",
+			config: func() *Config {
+				c := mkDefaultConfig()
+				c.Network.ServiceNetwork = []string{"92.82.72.62/16", "fd0a::/64"}
+				c.Network.ClusterNetwork = []string{"52.42.32.22/16", "fd0b::/64"}
+				c.Node.NodeIPV6 = "2001:db0::ff:::1"
+				return c
+			}(),
+			expectErr: true,
+		},
+		{
+			name: "node-ipv6-must-be-ipv6",
+			config: func() *Config {
+				c := mkDefaultConfig()
+				c.Network.ServiceNetwork = []string{"93.83.73.63/16", "fd0c::/64"}
+				c.Network.ClusterNetwork = []string{"53.43.33.23/16", "fd0d::/64"}
+				c.Node.NodeIPV6 = "11.22.33.44"
 				return c
 			}(),
 			expectErr: true,
