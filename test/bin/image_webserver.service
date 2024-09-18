@@ -1,0 +1,12 @@
+[Unit]
+Description=Nginx file-server service for the images used by VMs running test scenarios.
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=1
+User=microshift
+ExecStart=/usr/bin/bash ./home/microshift/microshift/test/bin/image_webserver.sh start
+
+[Install]
+WantedBy=multi-user.target

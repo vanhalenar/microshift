@@ -132,16 +132,9 @@ ExecStart=nginx -c "${NGINX_CONFIG}" -e "${IMAGEDIR}/nginx.log"
 WantedBy=multi-user.target
 EOF
 
-    cat > "${SERVERSCRIPT}" <<EOF
-#!/bin/bash
+    # Add httpd_t domain to permissive, otherwise nginx won't be able to access files
+    #sudo semanage permissive -a httpd_t
 
-nginx \
-    -c "${NGINX_CONFIG}" \
-    -e "${IMAGEDIR}/nginx.log"
-
-EOF
-
-    sudo chmod +x ${SERVERSCRIPT}
     sudo cp "${SERVICE}" /etc/systemd/system/image_webserver.service
 
     sudo systemctl start image_webserver.service
