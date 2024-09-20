@@ -25,8 +25,9 @@ OCROLLOUT_CMD="oc rollout ${OCCONFIG_OPT}"
 # a health check failure
 LOG_FAILURE_FILES=()
 
-# Print GRUB boot, Greenboot variables and ostree status affecting the script
-# behavior. This information is important for troubleshooting rollback issues.
+# Print GRUB boot, Greenboot variables and ostree / bootc status affecting the
+# script behavior. This information is important for troubleshooting rollback
+# issues.
 #
 # args: None
 # return: Print the GRUB boot variables, /etc/greenboot/greenboot.conf settings
@@ -39,18 +40,40 @@ function print_boot_status() {
 
     local grub_vars
     local boot_vars
-    local ostr_stat
     grub_vars=$(grub2-editenv - list | grep ^boot_ || true)
     boot_vars=$(set | grep -E '^GREENBOOT_|^MICROSHIFT_' || true)
-    ostr_stat=$(ostree admin status 2>/dev/null || true)
 
     [ -z "${grub_vars}" ] && grub_vars="None"
     [ -z "${boot_vars}" ] && boot_vars="None"
-    [ -z "${ostr_stat}" ] && ostr_stat="Not an ostree system"
+
+    # Assume RPM system installation type
+    local system_type
+    local system_stat
+    system_type="RPM"
+    system_stat="Not an ostree / bootc system"
+
+    # Check ostree and bootc status. Note that on bootc systems, ostree status
+    # command may also return valid output, so it needs to be overriden by the
+    # bootc status command output.
+    if which ostree &>/dev/null ; then
+        local -r ostree_stat=$(ostree admin status 2>/dev/null || true)
+        if [ -n "${ostree_stat}" ] ; then
+            system_type="ostree"
+            system_stat="${ostree_stat}"
+        fi
+    fi
+    if which bootc &>/dev/null ; then
+        local -r bootc_stat=$(bootc status --booted --json 2>/dev/null | jq -r .status.type || true)
+        if [ "${bootc_stat}" == "bootcHost" ] ; then
+            system_type="bootc"
+            system_stat="${bootc_stat}"
+        fi
+    fi
 
     echo -e "GRUB boot variables:\n${grub_vars}"
     echo -e "Greenboot variables:\n${boot_vars}"
-    echo -e "The ostree status:\n${ostr_stat}"
+    echo -e "System installation type:\n${system_type}"
+    echo -e "System installation status:\n${system_stat}"
 }
 
 # Get the recommended wait timeout to be used for running health check operations.
@@ -336,8 +359,10 @@ try:
             sys.exit(0)
         finally:
             stream.close()
+except FileNotFoundError:
+    print(f"/etc/microshift/config.yaml does not exist - assuming LVMS is deployed")
 except Exception as e:
-    print(f"error opening config: {e}", file=sys.Stderr)
+    print(f"Cannot decide if LVMS should exist - assuming YES: error opening config: {e}", file=sys.stderr)
     '; then
          return 0
     fi
@@ -378,8 +403,10 @@ try:
             sys.exit(0)
         finally:
             stream.close()
+except FileNotFoundError:
+    print(f"/etc/microshift/config.yaml does not exist - assuming CSI component {sys.argv[1]} is deployed")
 except Exception as e:
-    print(f"error opening config: {e}", file=sys.Stderr)
+    print(f"Cannot decide if CSI component {sys.argv[1]} should be deployed - assuming YES: error opening config: {e}", file=sys.stderr)
 ' "${component}";
     then
         return 0
