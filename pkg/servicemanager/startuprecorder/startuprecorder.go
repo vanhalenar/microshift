@@ -2,10 +2,13 @@ package startuprecorder
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/openshift/microshift/pkg/util/sigchannel"
 	"k8s.io/klog/v2"
 )
 
@@ -30,13 +33,19 @@ type StartupData struct {
 }
 
 type StartupRecorder struct {
-	Data StartupData
-
-	m sync.Mutex
+	Data     StartupData
+	m        sync.Mutex
+	logFlags map[string]chan struct{}
 }
 
 func New() *StartupRecorder {
-	return &StartupRecorder{}
+	return &StartupRecorder{
+		logFlags: make(map[string]chan struct{}),
+	}
+}
+
+func (l *StartupRecorder) AddService(serviceName string) {
+	l.logFlags[serviceName] = make(chan struct{})
 }
 
 func (l *StartupRecorder) ServiceReady(serviceName string, dependencies []string, start time.Time) {
@@ -56,6 +65,7 @@ func (l *StartupRecorder) ServiceReady(serviceName string, dependencies []string
 	l.m.Lock()
 	defer l.m.Unlock()
 	l.Data.Services = append(l.Data.Services, serviceData)
+	l.logFlags[serviceName] <- struct{}{}
 }
 
 func (l *StartupRecorder) MicroshiftStarts(start time.Time) {
@@ -77,18 +87,36 @@ func (l *StartupRecorder) ServicesStart(start time.Time) {
 }
 
 func (l *StartupRecorder) OutputData() {
-	jsonOutput, err := json.Marshal(l.Data)
-	if err != nil {
-		klog.Error("Failed to marshal startup data")
-	}
+	go func() {
+		vals := ReadOnlyValues(l.logFlags)
 
-	klog.Infof("Startup data: %s", string(jsonOutput))
+		select {
+		case <-sigchannel.And(vals):
+			jsonOutput, err := json.Marshal(l.Data)
+			if err != nil {
+				klog.Error("Failed to marshal startup data")
+			}
 
-	path, ok := os.LookupEnv("STARTUP_LOGS_PATH")
-	if ok {
-		err = os.WriteFile(path, jsonOutput, 0600)
-		if err != nil {
-			klog.Error("Failed to write startup data to file")
+			klog.Infof("Startup data: %s", string(jsonOutput))
+
+			path, ok := os.LookupEnv("STARTUP_LOGS_PATH")
+			if ok {
+				err = os.WriteFile(path, jsonOutput, 0600)
+				if err != nil {
+					klog.Error("Failed to write startup data to file")
+				}
+			}
 		}
+	}()
+}
+
+func ReadOnlyValues(m map[string]chan struct{}) []<-chan struct{} {
+	values := slices.Collect(maps.Values(m))
+
+	readOnlyValues := make([]<-chan struct{}, len(values))
+	for i, ch := range values {
+		readOnlyValues[i] = ch
 	}
+
+	return readOnlyValues
 }
