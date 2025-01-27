@@ -29,27 +29,13 @@ PATCH := $(shell echo $(SOURCE_GIT_TAG) | awk -F'[._~-]' '{print $$3}')
 
 SRC_ROOT :=$(shell pwd)
 
+WITH_FLANNEL ?= 0
 OUTPUT_DIR :=_output
 RPM_BUILD_DIR :=$(OUTPUT_DIR)/rpmbuild
-ISO_DIR :=$(OUTPUT_DIR)/image-builder
 CROSS_BUILD_BINDIR :=$(OUTPUT_DIR)/bin
 FROM_SOURCE :=false
-CTR_CMD :=$(or $(shell which podman 2>/dev/null), $(shell which docker 2>/dev/null))
 ARCH :=$(shell uname -m |sed -e "s/x86_64/amd64/" |sed -e "s/aarch64/arm64/")
-# Image builder arguments can be overriden from the environment:
-# - PULLSECRET: path to a pull secret file
-# - AUTHORIZED_KEYS: path to an SSH authorized keys file
-# - IMAGE_BUILDER_ARGS: any build.sh script options
 PULLSECRET ?= ~/.pull-secret.json
-BASE_IMAGE_BUILDER_ARGS := -pull_secret_file $(PULLSECRET)
-ifdef IMAGE_BUILDER_ARGS
-    BASE_IMAGE_BUILDER_ARGS += $(IMAGE_BUILDER_ARGS)
-endif
-AUTHORIZED_KEYS ?= $(HOME)/.ssh/authorized_keys
-ifneq ("$(wildcard $(AUTHORIZED_KEYS))","")
-    BASE_IMAGE_BUILDER_ARGS += -authorized_keys_file $(AUTHORIZED_KEYS)
-endif
-IMAGE_BUILDER_ARGS = $(BASE_IMAGE_BUILDER_ARGS)
 
 # restrict included verify-* targets to only process project files
 GO_PACKAGES=$(go list ./cmd/... ./pkg/...)
@@ -112,7 +98,7 @@ GO_TEST_PACKAGES=./cmd/... ./pkg/...
 export CGO_ENABLED ?= 1
 
 # Specify OCP build tools image tag when building rpm with podman
-RPM_BUILDER_IMAGE_TAG := rhel-9-golang-1.22-builder-multi-openshift-4.17
+RPM_BUILDER_IMAGE_TAG := rhel-9-golang-1.23-openshift-4.19
 
 all: generate-config microshift etcd
 
@@ -149,8 +135,10 @@ verify: verify-fast
 verify-fast: verify-go verify-assets verify-sh verify-py verify-config verify-rf
 
 # Full verification checks that should run in CI
+# Note that jobs using podman (e.g. verify-containers) cannot run as part of
+# the verify job.
 .PHONY: verify-ci
-verify-ci: verify-fast verify-images verify-licenses verify-containers
+verify-ci: verify-fast verify-images verify-licenses
 
 .PHONY: verify-images
 verify-images:
@@ -184,13 +172,15 @@ verify-py:
 verify-rf:
 	./scripts/verify/verify-rf.sh
 
+# Container check is not run in any default verify target as it uses the podman
+# command, which does not work in the containerized verify CI job.
+# Container verification is performed as part of the image build procedure.
 .PHONY: verify-containers
 verify-containers:
-	./scripts/fetch_tools.sh hadolint && \
-	./_output/bin/hadolint $$(find . -iname '*containerfile*' -o -iname '*dockerfile*'| grep -v "vendor\|_output\|origin\|.git")
+	./scripts/verify/verify-containers.sh
 
-# Vulnerability check is not run in any default verify target
-# It should be run explicitly before the release to track and fix known vulnerabilities
+# Vulnerability check is not run in any default verify target.
+# It should be run explicitly before the release to track and fix known vulnerabilities.
 # Note: Errors are ignored to allow listing vulnerabilities from all the dependencies
 .PHONY: verify-govulncheck
 verify-govulncheck: microshift etcd
@@ -277,6 +267,7 @@ rpm:
 	SOURCE_GIT_TAG=${SOURCE_GIT_TAG} \
 	SOURCE_GIT_COMMIT=${SOURCE_GIT_COMMIT} \
 	SOURCE_GIT_TREE_STATE=${SOURCE_GIT_TREE_STATE} \
+	WITH_FLANNEL=${WITH_FLANNEL} \
 	./packaging/rpm/make-rpm.sh rpm local
 .PHONY: rpm
 
@@ -286,25 +277,9 @@ srpm:
 	SOURCE_GIT_TAG=${SOURCE_GIT_TAG} \
 	SOURCE_GIT_COMMIT=${SOURCE_GIT_COMMIT} \
 	SOURCE_GIT_TREE_STATE=${SOURCE_GIT_TREE_STATE} \
+	WITH_FLANNEL=${WITH_FLANNEL} \
 	./packaging/rpm/make-rpm.sh srpm local
 .PHONY: srpm
-
-image-build-configure:
-	./scripts/image-builder/configure.sh
-.PHONY: image-build-configure
-
-image-build-iso: rpm
-	./scripts/image-builder/build.sh $(IMAGE_BUILDER_ARGS)
-.PHONY: image-build-iso
-
-iso: image-build-configure image-build-iso
-.PHONY: iso
-
-image-build-commit: rpm
-	./scripts/image-builder/build.sh $(IMAGE_BUILDER_ARGS) -build_edge_commit
-
-commit: image-build-configure image-build-commit
-.PHONY: commit
 
 rpm-podman:
 	podman build \
@@ -319,6 +294,7 @@ rpm-podman:
 		--rm -i \
 		--volume $$(pwd):/opt/microshift:z \
 		--env TARGET_ARCH=$(TARGET_ARCH) \
+		--env WITH_FLANNEL=$(WITH_FLANNEL) \
 		microshift-builder:$(RPM_BUILDER_IMAGE_TAG) \
 		bash -ilc 'cd /opt/microshift && make rpm & pid=$$! ; \
 				   trap "echo Killing make PID $${pid}; kill $${pid}" INT ; \

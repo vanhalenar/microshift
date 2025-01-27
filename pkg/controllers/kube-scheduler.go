@@ -22,7 +22,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/openshift/library-go/pkg/crypto"
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/util"
 
@@ -54,8 +53,8 @@ func (s *KubeScheduler) configure(cfg *config.Config) {
 	s.options.ConfigFile = filepath.Join(config.DataDir, "/resources/kube-scheduler/config/config.yaml")
 	s.options.Authentication.RemoteKubeConfigFile = cfg.KubeConfigPath(config.KubeScheduler)
 	s.options.Authorization.RemoteKubeConfigFile = cfg.KubeConfigPath(config.KubeScheduler)
-	s.options.SecureServing.MinTLSVersion = string(fixedTLSProfile.MinTLSVersion)
-	s.options.SecureServing.CipherSuites = crypto.OpenSSLToIANACipherSuites(fixedTLSProfile.Ciphers)
+	s.options.SecureServing.MinTLSVersion = cfg.ApiServer.TLS.MinVersion
+	s.options.SecureServing.CipherSuites = cfg.ApiServer.TLS.CipherSuites
 	s.kubeconfig = cfg.KubeConfigPath(config.KubeScheduler)
 }
 
@@ -96,9 +95,20 @@ func (s *KubeScheduler) Run(ctx context.Context, ready chan<- struct{}, stopped 
 		return err
 	}
 
+	panicChannel := make(chan any, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicChannel <- r
+			}
+		}()
 		errorChannel <- kubescheduler.Run(ctx, cc, sched)
 	}()
 
-	return <-errorChannel
+	select {
+	case err := <-errorChannel:
+		return err
+	case perr := <-panicChannel:
+		panic(perr)
+	}
 }

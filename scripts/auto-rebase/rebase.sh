@@ -214,7 +214,10 @@ require_using_component_commit() {
     commit=$( cd "${STAGING_DIR}/${component}" && git rev-parse HEAD )
     echo "go mod edit -require ${modulepath}@${commit}"
     go mod edit -require "${modulepath}@${commit}"
-    go mod tidy # needed to replace commit with pseudoversion before next invocation of go mod edit
+    # Before calling edit we need to tidy. Since dependencies may be broken in between different
+    # edit and tidy commands, allow errors. A final tidy runs without -e to ensure all dependencies
+    # are ok.
+    go mod tidy -e
 }
 
 # Updates a replace directive using an embedded component's commit.
@@ -233,7 +236,10 @@ replace_using_component_commit() {
         commit=$( cd "${STAGING_DIR}/${reponame}" && git rev-parse HEAD )
         echo "go mod edit -replace ${modulepath}=${new_modulepath}@${commit}"
         go mod edit -replace "${modulepath}=${new_modulepath}@${commit}"
-        go mod tidy # needed to replace commit with pseudoversion before next invocation of go mod edit
+        # Before calling edit we need to tidy. Since dependencies may be broken in between different
+        # edit and tidy commands, allow errors. A final tidy runs without -e to ensure all dependencies
+        # are ok.
+        go mod tidy -e
         pseudoversion=$(grep_pseudoversion "$(get_replace_directive "$(pwd)/go.mod" "${modulepath}")")
         pseudoversions["${component}"]="${pseudoversion}"
     fi
@@ -687,7 +693,7 @@ EOF
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CANONICAL_HOSTNAME", "value": "router-default.apps.{{ .BaseDomain }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERS", "value": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERSUITES", "value": "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DISABLE_HTTP2", "value": "true"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DISABLE_HTTP2", "value": "{{ .RouterDisableHttp2 }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DISABLE_NAMESPACE_OWNERSHIP_CHECK", "value": "{{.RouterNamespaceOwnership}}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_LOAD_BALANCE_ALGORITHM", "value": "random"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     # TODO: Generate and volume mount the metrics-certs secret
@@ -695,15 +701,30 @@ EOF
     # yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_METRICS_TLS_KEY_FILE", "value": "/etc/pki/tls/metrics-certs/tls.key"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_METRICS_TYPE", "value": "haproxy"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_SERVICE_NAME", "value": "default"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_SET_FORWARDED_HEADERS", "value": "append"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_SET_FORWARDED_HEADERS", "value": "{{ .ForwardedHeaderPolicy }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_TCP_BALANCE_SCHEME", "value": "source"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_THREADS", "value": "4"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_THREADS", "value": "{{ .ThreadCount }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "SSL_MIN_VERSION", "value": "TLSv1.2"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     #    Not use proxy protocol due to lack of load balancer support
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_USE_PROXY_PROTOCOL", "value": "false"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "GRACEFUL_SHUTDOWN_DELAY", "value": "1s"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DOMAIN", "value": "apps.{{ .BaseDomain }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_IP_V4_V6_MODE", "value": "{{ .RouterMode }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_BUF_SIZE", "value": "{{ .RouterBufSize }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_MAX_REWRITE_SIZE", "value": "{{ .HeaderBufferMaxRewriteBytes }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_BACKEND_CHECK_INTERVAL", "value": "{{ .HealthCheckInterval }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DEFAULT_CLIENT_TIMEOUT", "value": "{{ .ClientTimeout }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CLIENT_FIN_TIMEOUT", "value": "{{ .ClientFinTimeout }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DEFAULT_SERVER_TIMEOUT", "value": "{{ .ServerTimeout }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DEFAULT_SERVER_FIN_TIMEOUT", "value": "{{ .ServerFinTimeout }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DEFAULT_TUNNEL_TIMEOUT", "value": "{{ .TunnelTimeout }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_INSPECT_DELAY", "value": "{{ .TlsInspectDelay }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_MAX_CONNECTIONS", "value": "{{ .MaxConnections }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DONT_LOG_NULL", "value": "{{ .LogEmptyRequests }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_HTTP_IGNORE_PROBES", "value": "{{ .HTTPEmptyRequestsPolicy }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_ENABLE_COMPRESSION", "value": "{{ .RouterEnableCompression }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_COMPRESSION_MIME", "value": "{{ .RouterCompressionMime }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+
     # TODO: Generate and volume mount the router-stats-default secret
     # yq -i '.spec.template.spec.containers[0].env += {"name": "STATS_PASSWORD_FILE", "value": "/var/lib/haproxy/conf/metrics-auth/statsPassword"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     # yq -i '.spec.template.spec.containers[0].env += {"name": "STATS_USERNAME_FILE", "value": "/var/lib/haproxy/conf/metrics-auth/statsUsername"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
@@ -767,18 +788,6 @@ EOF
     yq -i '.spec.template.spec.containers[0].args = [ "--v=2", "--leader-election=false"]' $target
     yq -i 'del(.spec.template.spec.priorityClassName) | del(.spec.template.spec.containers[0].securityContext.seccompProfile)' $target
     yq -i 'with(.spec.template.spec.containers[0].securityContext; .runAsUser = 65534)' $target
-
-    local target="${REPOROOT}/assets/components/csi-snapshot-controller/webhook_deployment.yaml"
-    yq -i '.metadata.namespace = "kube-system"' $target
-    yq -i '.spec.template.spec.containers[0].image = "{{ .ReleaseImage.csi_snapshot_validation_webhook }}"' $target
-    yq -i 'with(.spec.template.spec.containers[0].args;  .[] |= sub("\${LOG_LEVEL}", "2") )' $target
-    yq -i 'del(.spec.template.spec.priorityClassName)' $target
-    yq -i 'with(.spec.template.spec.containers[0].securityContext; .runAsUser = 65534)' $target
-
-    yq -i '.metadata.namespace = "kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/webhook_service.yaml"
-    yq -i '.metadata.namespace = "kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/webhook_serviceaccount.yaml"
-
-    yq -i '.webhooks[0].clientConfig.service.namespace="kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/webhook_config.yaml"
 
     yq -i '.metadata.namespace = "kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/serviceaccount.yaml"
 

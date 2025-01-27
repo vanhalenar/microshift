@@ -92,6 +92,12 @@ func newServiceLBControllerDescriptor() *ControllerDescriptor {
 }
 
 func startServiceLBController(ctx context.Context, controllerContext ControllerContext, controllerName string) (controller.Interface, bool, error) {
+	logger := klog.FromContext(ctx)
+	if controllerContext.Cloud == nil {
+		logger.Info("Warning: service-controller is set, but no cloud provider specified. Will not configure service controller.")
+		return nil, false, nil
+	}
+
 	serviceController, err := servicecontroller.New(
 		controllerContext.Cloud,
 		controllerContext.ClientBuilder.ClientOrDie("service-controller"),
@@ -102,7 +108,7 @@ func startServiceLBController(ctx context.Context, controllerContext ControllerC
 	)
 	if err != nil {
 		// This error shouldn't fail. It lives like this as a legacy.
-		klog.FromContext(ctx).Error(err, "Failed to start service controller")
+		logger.Error(err, "Failed to start service controller.")
 		return nil, false, nil
 	}
 	go serviceController.Run(ctx, int(controllerContext.ComponentConfig.ServiceController.ConcurrentServiceSyncs), controllerContext.ControllerManagerMetrics)
@@ -261,6 +267,11 @@ func newCloudNodeLifecycleControllerDescriptor() *ControllerDescriptor {
 
 func startCloudNodeLifecycleController(ctx context.Context, controllerContext ControllerContext, controllerName string) (controller.Interface, bool, error) {
 	logger := klog.FromContext(ctx)
+	if controllerContext.Cloud == nil {
+		logger.Info("Warning: node-controller is set, but no cloud provider specified. Will not configure node lifecyle controller.")
+		return nil, false, nil
+	}
+
 	cloudNodeLifecycleController, err := cloudnodelifecyclecontroller.NewCloudNodeLifecycleController(
 		controllerContext.InformerFactory.Core().V1().Nodes(),
 		// cloud node lifecycle controller uses existing cluster role from node-controller
@@ -337,8 +348,6 @@ func startPersistentVolumeBinderController(ctx context.Context, controllerContex
 		KubeClient:                controllerContext.ClientBuilder.ClientOrDie("persistent-volume-binder"),
 		SyncPeriod:                controllerContext.ComponentConfig.PersistentVolumeBinderController.PVClaimBinderSyncPeriod.Duration,
 		VolumePlugins:             plugins,
-		Cloud:                     controllerContext.Cloud,
-		ClusterName:               controllerContext.ComponentConfig.KubeCloudShared.ClusterName,
 		VolumeInformer:            controllerContext.InformerFactory.Core().V1().PersistentVolumes(),
 		ClaimInformer:             controllerContext.InformerFactory.Core().V1().PersistentVolumeClaims(),
 		ClassInformer:             controllerContext.InformerFactory.Storage().V1().StorageClasses(),
@@ -384,7 +393,6 @@ func startPersistentVolumeAttachDetachController(ctx context.Context, controller
 			csiNodeInformer,
 			csiDriverInformer,
 			controllerContext.InformerFactory.Storage().V1().VolumeAttachments(),
-			controllerContext.Cloud,
 			plugins,
 			GetDynamicPluginProber(controllerContext.ComponentConfig.PersistentVolumeBinderController.VolumeConfiguration),
 			controllerContext.ComponentConfig.AttachDetachController.DisableAttachDetachReconcilerSync,
@@ -419,7 +427,6 @@ func startPersistentVolumeExpanderController(ctx context.Context, controllerCont
 		ctx,
 		controllerContext.ClientBuilder.ClientOrDie("expand-controller"),
 		controllerContext.InformerFactory.Core().V1().PersistentVolumeClaims(),
-		controllerContext.Cloud,
 		plugins,
 		csiTranslator,
 		csimigration.NewPluginManager(csiTranslator, utilfeature.DefaultFeatureGate),
@@ -471,9 +478,9 @@ func startResourceClaimController(ctx context.Context, controllerContext Control
 		klog.FromContext(ctx),
 		controllerContext.ClientBuilder.ClientOrDie("resource-claim-controller"),
 		controllerContext.InformerFactory.Core().V1().Pods(),
-		controllerContext.InformerFactory.Resource().V1alpha2().PodSchedulingContexts(),
-		controllerContext.InformerFactory.Resource().V1alpha2().ResourceClaims(),
-		controllerContext.InformerFactory.Resource().V1alpha2().ResourceClaimTemplates())
+		controllerContext.InformerFactory.Resource().V1alpha3().PodSchedulingContexts(),
+		controllerContext.InformerFactory.Resource().V1alpha3().ResourceClaims(),
+		controllerContext.InformerFactory.Resource().V1alpha3().ResourceClaimTemplates())
 	if err != nil {
 		return nil, true, fmt.Errorf("failed to start resource claim controller: %v", err)
 	}

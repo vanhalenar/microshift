@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/openshift/microshift/pkg/admin/autorecovery"
 	"github.com/openshift/microshift/pkg/admin/data"
 	"github.com/openshift/microshift/pkg/util"
 
@@ -32,7 +33,7 @@ func servicesShouldBeInactive(backingUp bool) error {
 		}
 
 		if state == "failed" && backingUp {
-			fmt.Printf("WARNING: Service %q is %q - backup can potentially contain unhealthy data\n", service, state)
+			fmt.Fprintf(os.Stderr, "WARNING: Service %q is %q - backup can potentially contain unhealthy data\n", service, state)
 		}
 
 		if state != "inactive" && state != "failed" {
@@ -105,6 +106,14 @@ func backupRestorePreRun(backingUp bool) func(*cobra.Command, []string) error {
 			return err
 		}
 
+		if autorec, err := cmd.Flags().GetBool("auto-recovery"); err != nil {
+			return fmt.Errorf("failed to get `auto-recovery` flag: %w", err)
+		} else if autorec {
+			// For auto-recovery, the existence of the storage is not important.
+			// If it doesn't exist before backup, MicroShift will create it.
+			return nil
+		}
+
 		path := args[0]
 		_, _, err := backupPathToStorageAndName(path)
 		if err != nil {
@@ -141,6 +150,8 @@ func validateArgs(cmd *cobra.Command, args []string) error {
 }
 
 func NewBackupCommand() *cobra.Command {
+	autorec := false
+
 	cmd := &cobra.Command{
 		Use:               "backup PATH",
 		Short:             "Create a backup of MicroShift data",
@@ -151,19 +162,47 @@ func NewBackupCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// err is checked in PersistentPreRunE
 			storage, name, _ := backupPathToStorageAndName(args[0])
+
+			if autorec {
+				// For auto-recovery mode we treat given path as a directory where the backup subdirectory will be created.
+				// Normally it's interpreted as final destination.
+				storage = data.StoragePath(args[0])
+				if err := autorecovery.CreateStorageIfAbsent(storage); err != nil {
+					return err
+				}
+				var err error
+				name, err = autorecovery.GetBackupName()
+				if err != nil {
+					return err
+				}
+			}
+
 			dataManager, err := data.NewManager(storage)
 			if err != nil {
 				return err
 			}
 
-			return dataManager.Backup(name)
+			backupPath, err := dataManager.Backup(name)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s\n", backupPath)
+			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&autorec, "auto-recovery", false,
+		`Changes the behavior of the backup command.
+The PATH argument will be treated as a directory where backups are
+created using the naming scheme compatible with "restore --auto-recovery"`)
 
 	return cmd
 }
 
 func NewRestoreCommand() *cobra.Command {
+	autorec := false
+	dontSaveFailed := false
+
 	cmd := &cobra.Command{
 		Use:               "restore PATH",
 		Short:             "Restore MicroShift data from a backup",
@@ -171,6 +210,18 @@ func NewRestoreCommand() *cobra.Command {
 		PersistentPreRunE: backupRestorePreRun(false),
 
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if autorec {
+				acManager, err := autorecovery.NewManager(data.StoragePath(args[0]), !dontSaveFailed)
+				if err != nil {
+					return err
+				}
+				return acManager.PerformRestore()
+			}
+
+			if f := cmd.Flag("dont-save-failed"); f != nil && f.Changed {
+				return fmt.Errorf("--dont-save-failed cannot be used without --auto-recovery")
+			}
+
 			// err is checked in PersistentPreRunE
 			storage, name, _ := backupPathToStorageAndName(args[0])
 			dataManager, err := data.NewManager(storage)
@@ -181,6 +232,16 @@ func NewRestoreCommand() *cobra.Command {
 			return dataManager.Restore(name)
 		},
 	}
+
+	cmd.Flags().BoolVar(&autorec, "auto-recovery", false,
+		`Changes the behavior of the restore command.
+The PATH argument will be treated as a directory where backups are
+created with "backup --auto-recovery" command.`)
+
+	cmd.Flags().BoolVar(&dontSaveFailed, "dont-save-failed", false,
+		`Only applicable if --auto-recovery is also specified.
+Don't make a copy of MicroShift data directory inside
+"failed" subdirectory for later analysis.`)
 
 	return cmd
 }

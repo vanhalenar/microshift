@@ -31,52 +31,13 @@ permissions configured.
 
 ### Build Image
 
-Create the `Containerfile` file with the following contents.
+Download the [Containerfile](../config/Containerfile.bootc-rhel9) using the following
+command and use it for subsequent image builds.
 
-```docker
-FROM registry.redhat.io/rhel9/rhel-bootc:9.4
+```bash
+URL=https://raw.githubusercontent.com/openshift/microshift/refs/heads/main/docs/config/Containerfile.bootc-rhel9
 
-ARG USHIFT_VER=4.16
-RUN dnf config-manager \
-        --set-enabled rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms \
-        --set-enabled fast-datapath-for-rhel-9-$(uname -m)-rpms
-RUN dnf install -y firewalld microshift && \
-    systemctl enable microshift && \
-    dnf clean all
-
-# Create a default 'redhat' user with the specified password.
-# Add it to the 'wheel' group to allow for running sudo commands.
-ARG USER_PASSWD
-RUN if [ -z "${USER_PASSWD}" ] ; then \
-        echo USER_PASSWD is a mandatory build argument && exit 1 ; \
-    fi
-RUN useradd -m -d /var/home/redhat -G wheel redhat && \
-    echo "redhat:${USER_PASSWD}" | chpasswd
-
-# Mandatory firewall configuration
-RUN firewall-offline-cmd --zone=public --add-port=22/tcp && \
-    firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
-    firewall-offline-cmd --zone=trusted --add-source=169.254.169.1
-# Application-specific firewall configuration
-RUN firewall-offline-cmd --zone=public --add-port=80/tcp && \
-    firewall-offline-cmd --zone=public --add-port=443/tcp && \
-    firewall-offline-cmd --zone=public --add-port=30000-32767/tcp && \
-    firewall-offline-cmd --zone=public --add-port=30000-32767/udp
-
-# Create a systemd unit to recursively make the root filesystem subtree
-# shared as required by OVN images
-RUN cat > /etc/systemd/system/microshift-make-rshared.service <<'EOF'
-[Unit]
-Description=Make root filesystem shared
-Before=microshift.service
-ConditionVirtualization=container
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/mount --make-rshared /
-[Install]
-WantedBy=multi-user.target
-EOF
-RUN systemctl enable microshift-make-rshared.service
+curl -s -o Containerfile "${URL}"
 ```
 
 > **Important:**<br>
@@ -95,20 +56,20 @@ image from the `registry.redhat.io` registry
 
 ```bash
 PULL_SECRET=~/.pull-secret.json
-USER_PASSWD=<your_redhat_user_password>
-IMAGE_NAME=microshift-4.16-bootc
+USER_PASSWD="<your_redhat_user_password>"
+IMAGE_NAME=microshift-4.17-bootc
 
 sudo podman build --authfile "${PULL_SECRET}" -t "${IMAGE_NAME}" \
     --build-arg USER_PASSWD="${USER_PASSWD}" \
     -f Containerfile
 ```
 
-Verify that the local MicroShift 4.16 `bootc` image was created.
+Verify that the local MicroShift 4.17 `bootc` image was created.
 
 ```bash
 $ sudo podman images "${IMAGE_NAME}"
 REPOSITORY                       TAG         IMAGE ID      CREATED        SIZE
-localhost/microshift-4.16-bootc  latest      193425283c00  2 minutes ago  2.31 GB
+localhost/microshift-4.17-bootc  latest      193425283c00  2 minutes ago  2.31 GB
 ```
 
 ### Publish Image
@@ -149,7 +110,7 @@ $ find /lib/modules/$(uname -r) -name "openvswitch*"
 /lib/modules/6.9.9-200.fc40.x86_64/kernel/net/openvswitch
 /lib/modules/6.9.9-200.fc40.x86_64/kernel/net/openvswitch/openvswitch.ko.xz
 
-$ IMAGE_NAME=microshift-4.16-bootc
+$ IMAGE_NAME=microshift-4.17-bootc
 $ sudo podman inspect "${IMAGE_NAME}" | grep kernel-core
         "created_by": "kernel-core-5.14.0-427.26.1.el9_4.x86_64"
 ```
@@ -222,7 +183,7 @@ The host shares the following configuration with the container:
 
 ```bash
 PULL_SECRET=~/.pull-secret.json
-IMAGE_NAME=microshift-4.16-bootc
+IMAGE_NAME=microshift-4.17-bootc
 
 sudo modprobe openvswitch
 sudo podman run --rm -it --privileged \
@@ -268,10 +229,13 @@ gaining access to private container registries:
 pre-install stage to authenticate `quay.io/myorg` registry access
 * `PULL_SECRET` file contents are copied to `/etc/crio/openshift-pull-secret`
 at the post-install stage to authenticate OpenShift registry access
+* `IMAGE_REF` variable contains the MicroShift bootc container image reference
+to be installed
 
 ```bash
 AUTH_CONFIG=~/.quay-auth.json
 PULL_SECRET=~/.pull-secret.json
+IMAGE_REF="quay.io/<myorg>/<mypath>/microshift-4.17-bootc"
 ```
 
 > See the `containers-auth.json(5)` manual pages for more information on the
@@ -317,7 +281,7 @@ EOF
 %end
 
 # Pull a 'bootc' image from a remote registry
-ostreecontainer --url quay.io/myorg/mypath/microshift-4.16-bootc
+ostreecontainer --url "${IMAGE_REF}"
 
 %post --log=/dev/console --erroronfail
 
@@ -348,7 +312,7 @@ previous step to pull a `bootc` image from the remote registry and use it to ins
 the RHEL operating system.
 
 ```bash
-VMNAME=microshift-4.16-bootc
+VMNAME=microshift-4.17-bootc
 NETNAME=default
 
 sudo virt-install \
@@ -359,6 +323,119 @@ sudo virt-install \
     --network network=${NETNAME},model=virtio \
     --events on_reboot=restart \
     --location /var/lib/libvirt/images/rhel-9.4-$(uname -m)-boot.iso \
+    --initrd-inject kickstart.ks \
+    --extra-args "inst.ks=file://kickstart.ks" \
+    --wait
+```
+
+Log into the virtual machine using the `redhat:<password>` credentials.
+Run the following command to verify that all the MicroShift pods are up and running
+without errors.
+
+```bash
+watch sudo oc get pods -A \
+    --kubeconfig /var/lib/microshift/resources/kubeadmin/kubeconfig
+```
+
+## Using Bootc Image Builder (BIB)
+
+The [bootc-image-builder](https://github.com/osbuild/bootc-image-builder), is a containerized tool to
+create disk images from bootc images. You can use the images that you build to deploy disk images in
+different environments, such as the edge, server, and clouds.
+
+### Prepare Build Config File
+A build config is a Toml (or JSON) file with customizations for the resulting image.
+The config file is mapped into the container directory to /config.toml. The customizations are
+specified under a customizations object.
+
+Set variables pointing to secret files that are included in `config.toml` for
+gaining access to private container registries:
+* `PULL_SECRET` file contents are copied to `/etc/crio/openshift-pull-secret`
+  at the post-install stage to authenticate OpenShift registry access
+
+```bash
+PULL_SECRET=~/.pull-secret.json
+IMAGE_NAME=microshift-4.17-bootc
+```
+
+Run the following command to create the `kickstart.ks` file to be used during
+the virtual machine installation. If you want to embed the kickstart file directly
+to iso using BIB please refer to [upstream docs](https://osbuild.org/docs/bootc/#anaconda-iso-installer-options-installer-mapping)
+
+```bash
+cat > kickstart.ks <<EOFKS
+lang en_US.UTF-8
+keyboard us
+timezone UTC
+text
+reboot
+
+# Partition the disk with hardware-specific boot and swap partitions, adding an
+# LVM volume that contains a 10GB+ system root. The remainder of the volume will
+# be used by the CSI driver for storing data.
+zerombr
+clearpart --all --initlabel
+# Create boot and swap partitions as required by the current hardware platform
+reqpart --add-boot
+# Add an LVM volume group and allocate a system root logical volume
+part pv.01 --grow
+volgroup rhel pv.01
+logvol / --vgname=rhel --fstype=xfs --size=10240 --name=root
+
+# Lock root user account
+rootpw --lock
+
+# Configure network to use DHCP and activate on boot
+network --bootproto=dhcp --device=link --activate --onboot=on
+
+%post --log=/dev/console --erroronfail
+
+# Create an OpenShift pull secret file
+cat > /etc/crio/openshift-pull-secret <<'EOF'
+$(cat "${PULL_SECRET}")
+EOF
+chmod 600 /etc/crio/openshift-pull-secret
+
+%end
+EOFKS
+```
+
+### Create ISO image using BIB
+
+```bash
+mkdir ./output
+
+sudo podman run --authfile ${PULL_SECRET} --rm -it \
+    --privileged \
+    --security-opt label=type:unconfined_t \
+    -v /var/lib/containers/storage:/var/lib/containers/storage \
+    -v ./config.toml:/config.toml:ro  \
+    -v ./output:/output \
+    registry.redhat.io/rhel9/bootc-image-builder:latest \
+    --local \
+    --type iso \
+    --config /config.toml \
+    localhost/${IMAGE_NAME}:latest
+```
+
+### Create Virtual Machine
+
+Copy the `install.iso` file to the `/var/lib/libvirt/images` directory.
+
+```bash
+VMNAME=microshift-4.17-bootc
+NETNAME=default
+
+sudo cp -Z ./output/bootiso/install.iso /var/lib/libvirt/images/${VMNAME}.iso
+
+sudo virt-install \
+    --name ${VMNAME} \
+    --vcpus 2 \
+    --memory 2048 \
+    --disk path=/var/lib/libvirt/images/${VMNAME}.qcow2,size=20 \
+    --network network=${NETNAME},model=virtio \
+    --events on_reboot=restart \
+    --location /var/lib/libvirt/images/${VMNAME}.iso \
     --initrd-inject kickstart.ks \
     --extra-args "inst.ks=file://kickstart.ks" \
     --wait
@@ -385,10 +462,10 @@ manner to create multi-architecture images.
 
 ```bash
 PULL_SECRET=~/.pull-secret.json
-USER_PASSWD=<your_redhat_user_password>
+USER_PASSWD="<your_redhat_user_password>"
 IMAGE_ARCH=amd64 # Use amd64 or arm64 depending on the current platform
 IMAGE_PLATFORM="linux/${IMAGE_ARCH}"
-IMAGE_NAME="microshift-4.16-bootc:linux-${IMAGE_ARCH}"
+IMAGE_NAME="microshift-4.17-bootc:linux-${IMAGE_ARCH}"
 
 sudo podman build --authfile "${PULL_SECRET}" -t "${IMAGE_NAME}" \
     --platform "${IMAGE_PLATFORM}" \
@@ -396,13 +473,13 @@ sudo podman build --authfile "${PULL_SECRET}" -t "${IMAGE_NAME}" \
     -f Containerfile
 ```
 
-Verify that the local MicroShift 4.16 `bootc` image was created for the specified
+Verify that the local MicroShift 4.17 `bootc` image was created for the specified
 platform.
 
 ```bash
 $ sudo podman images "${IMAGE_NAME}"
 REPOSITORY                       TAG          IMAGE ID      CREATED         SIZE
-localhost/microshift-4.16-bootc  linux-amd64  3f7e136fccb5  13 minutes ago  2.19 GB
+localhost/microshift-4.17-bootc  linux-amd64  3f7e136fccb5  13 minutes ago  2.19 GB
 ```
 
 Repeat the procedure on the other platform (i.e. `arm64`) and proceed by publishing
@@ -422,7 +499,7 @@ and publish it to the remote registry.
 ```bash
 REGISTRY_URL=quay.io
 REGISTRY_ORG=myorg/mypath
-BASE_NAME=microshift-4.16-bootc
+BASE_NAME=microshift-4.17-bootc
 MANIFEST_NAME="${BASE_NAME}:latest"
 
 sudo podman manifest create -a "localhost/${MANIFEST_NAME}" \
@@ -448,6 +525,6 @@ $ sudo podman manifest inspect \
 ```
 
 It is now possible to access images using the manifest name with the `latest` tag
-(e.g. `quay.io/myorg/mypath/microshift-4.16-bootc:latest`). The image for the
+(e.g. `quay.io/myorg/mypath/microshift-4.17-bootc:latest`). The image for the
 current platform will automatically be pulled from the registry if it is part of
 the manifest list.

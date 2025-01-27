@@ -48,6 +48,16 @@ ${LVMS_CSI_SNAPSHOT_DISABLED}       SEPARATOR=\n
 ...                                 storage:
 ...                                 \ \ driver: "none"
 ...                                 \ \ optionalCsiComponents: [ none ]
+${TLS_13_MIN_VERSION}               SEPARATOR=\n
+...                                 apiServer:
+...                                 \ \ tls:
+...                                 \ \ \ \ minVersion: VersionTLS13
+${TLS_12_CUSTOM_CIPHER}             SEPARATOR=\n
+...                                 apiServer:
+...                                 \ \ tls:
+...                                 \ \ \ \ cipherSuites:
+...                                 \ \ \ \ - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+...                                 \ \ \ \ minVersion: VersionTLS12
 
 
 *** Test Cases ***
@@ -79,7 +89,7 @@ Deploy MicroShift With LVMS By Default
     [Documentation]    Verify that LVMS and CSI snapshotting are deployed when config fields are null.
     [Setup]    Deploy Storage Config    ${LVMS_DEFAULT}
     LVMS Is Deployed
-    CSI Snapshot Controller And Webhook Are Deployed
+    CSI Snapshot Controller Is Deployed
     [Teardown]    Run Keywords
     ...    Remove Storage Drop In Config
     ...    Restart MicroShift
@@ -89,7 +99,7 @@ Deploy MicroShift Without LVMS
     ...    components are still deployed.
     [Setup]    Deploy Storage Config    ${LVMS_DISABLED}
 
-    CSI Snapshot Controller And Webhook Are Deployed
+    CSI Snapshot Controller Is Deployed
     Run Keyword And Expect Error    1 != 0
     ...    LVMS Is Deployed
     [Teardown]    Run Keywords
@@ -102,10 +112,46 @@ Deploy MicroShift Without CSI Snapshotter
 
     LVMS Is Deployed
     Run Keyword And Expect Error    1 != 0
-    ...    CSI Snapshot Controller And Webhook Are Deployed
+    ...    CSI Snapshot Controller Is Deployed
 
     [Teardown]    Run Keywords
     ...    Remove Storage Drop In Config
+    ...    Restart MicroShift
+
+Custom TLS 1_3 configuration
+    [Documentation]    Configure API server to use TLS 1.3 and verify only that
+    ...    version works
+    [Setup]    Setup TLS Configuration    ${TLS_13_MIN_VERSION}
+
+    ${rc}=    Execute Command
+    ...    openssl s_client -connect ${USHIFT_HOST}:6443 -tls1_3 <<< "Q"
+    ...    sudo=True    return_stdout=False    return_stderr=False    return_rc=True
+    Should Be Equal As Integers    ${rc}    0
+
+    ${rc}=    Execute Command
+    ...    openssl s_client -connect ${USHIFT_HOST}:6443 -tls1_2
+    ...    sudo=True    return_stdout=False    return_stderr=False    return_rc=True
+    Should Not Be Equal As Integers    ${rc}    0
+
+    [Teardown]    Run Keywords
+    ...    Remove TLS Drop In Config
+    ...    Restart MicroShift
+
+Custom TLS 1_2 configuration
+    [Documentation]    Configure a custom cipher suite using TLS 1.2 and verify
+    ...    it is used
+    [Setup]    Setup TLS Configuration    ${TLS_12_CUSTOM_CIPHER}
+
+    ${rc}=    Execute Command
+    ...    openssl s_client -connect ${USHIFT_HOST}:6443 -tls1_2 <<< "Q" 2>/dev/null | grep "Cipher is ECDHE-RSA-AES128-GCM-SHA256"
+    ...    sudo=True
+    ...    return_stdout=False
+    ...    return_stderr=False
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0
+
+    [Teardown]    Run Keywords
+    ...    Remove TLS Drop In Config
     ...    Restart MicroShift
 
 
@@ -160,6 +206,16 @@ Deploy Storage Config
     Drop In MicroShift Config    ${config}    10-storage
     Start MicroShift
 
+Setup TLS Configuration
+    [Documentation]    Apply the TLS configuration in the argument
+    [Arguments]    ${config}
+    Drop In MicroShift Config    ${config}    10-tls
+    Restart MicroShift
+
+Remove TLS Drop In Config
+    [Documentation]    Remove the previously created drop-in config for storage
+    Remove Drop In MicroShift Config    10-tls
+
 Remove Storage Drop In Config
     [Documentation]    Remove the previously created drop-in config for storage
     Remove Drop In MicroShift Config    10-storage
@@ -167,10 +223,11 @@ Remove Storage Drop In Config
 LVMS Is Deployed
     [Documentation]    Wait for LVMS components to deploy
     Named Deployment Should Be Available    lvms-operator    openshift-storage    120s
-    # the daemonset trails the lvms-operator by roughly 1min, so give it extra time to spin up
+    # Wait for vg-manager daemonset to exist before trying to "wait".
+    # `oc wait` fails if the object doesn't exist.
+    Wait Until Resource Exists    daemonset    vg-manager    openshift-storage    120s
     Named Daemonset Should Be Available    vg-manager    openshift-storage    120s
 
-CSI Snapshot Controller And Webhook Are Deployed
-    [Documentation]    Wait for CSI snapshot controller and webhook to be deployed
+CSI Snapshot Controller Is Deployed
+    [Documentation]    Wait for CSI snapshot controller to be deployed
     Named Deployment Should Be Available    csi-snapshot-controller    kube-system    120s
-    Named Deployment Should Be Available    csi-snapshot-webhook    kube-system    120s

@@ -7,8 +7,8 @@ import glob
 import os
 import platform
 import re
-import shutil
 import sys
+import time
 import traceback
 
 import common
@@ -33,6 +33,7 @@ PULL_SECRET = common.get_env_var('PULL_SECRET', f"{HOME_DIR}/.pull-secret.json")
 # features are required
 BIB_IMAGE = "registry.redhat.io/rhel9/bootc-image-builder:latest"
 GOMPLATE = common.get_env_var('GOMPLATE')
+MIRROR_REGISTRY = common.get_env_var('MIRROR_REGISTRY_URL')
 FORCE_REBUILD = False
 
 
@@ -57,18 +58,6 @@ def cleanup_atexit(dry_run):
         common.run_command_in_shell(["sudo", "podman", "stop", cids], dry_run)
 
 
-def should_skip(file):
-    if not os.path.exists(file):
-        return False
-    # Forcing the rebuild if needed
-    if FORCE_REBUILD:
-        common.print_msg(f"Forcing rebuild of '{file}'")
-        return False
-
-    common.print_msg(f"The '{file}' already exists, skipping")
-    return True
-
-
 def find_latest_rpm(repo_path, version=""):
     rpms = glob.glob(f"{repo_path}/**/microshift-release-info-{version}*.rpm", recursive=True)
     if not rpms:
@@ -84,7 +73,7 @@ def is_rhocp_available(ver):
 
     try:
         # Run the dnf command to check for cri-o in the specified repository
-        repo_info = common.run_command_in_shell(f"sudo dnf repository-packages --showduplicates {repository} info cri-o")
+        repo_info = common.run_command_in_shell(f"dnf repository-packages --showduplicates {repository} info cri-o")
         common.print_msg(repo_info)
         return True
     except Exception:
@@ -97,10 +86,10 @@ def get_rhocp_beta_url_if_available(ver):
 
     try:
         # Run the dnf command to check for cri-o in the specified repository
-        repo_info = common.run_command_in_shell(f"sudo dnf repository-packages --showduplicates --disablerepo '*' --repofrompath 'this,{url_amd}' this info cri-o")
+        repo_info = common.run_command_in_shell(f"dnf repository-packages --showduplicates --disablerepo '*' --repofrompath 'this,{url_amd}' this info cri-o")
         common.print_msg(repo_info)
 
-        repo_info = common.run_command_in_shell(f"sudo dnf repository-packages --showduplicates --disablerepo '*' --repofrompath 'this,{url_arm}' this info cri-o")
+        repo_info = common.run_command_in_shell(f"dnf repository-packages --showduplicates --disablerepo '*' --repofrompath 'this,{url_arm}' this info cri-o")
         common.print_msg(repo_info)
 
         # Use specific minor version RHOCP mirror only if both arches are available.
@@ -135,10 +124,29 @@ def set_rpm_version_info_vars():
     SOURCE_VERSION = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm}")
     SOURCE_VERSION_BASE = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm_base}")
 
-    # Update the source version environment variables based on the global variables.
+    # The source images are used in selected container image builds
+    global SOURCE_IMAGES
+
+    src_img_cmd = f"rpm2cpio {release_info_rpm}"
+    src_img_cmd += f' | cpio -i --to-stdout "*release-{UNAME_M}.json" 2>/dev/null'
+    src_img_cmd += ' | jq -r \'[ .images[] ] | join(",")\''
+    SOURCE_IMAGES = common.run_command_in_shell(src_img_cmd)
+
+    global SSL_CLIENT_KEY_FILE
+    global SSL_CLIENT_CERT_FILE
+    # Find the first file matching "*-key.pem" in the entitlements directory
+    keyfile = next(glob.iglob("/etc/pki/entitlement/*-key.pem"), None)
+    # Find the first file matching "*.pem" but not "*-key.pem" in the entitlements directory
+    certfile = next((file for file in glob.iglob("/etc/pki/entitlement/*.pem") if not file.endswith("-key.pem")), None)
+    # Replace the entitlement path with the one usable inside a container
+    SSL_CLIENT_KEY_FILE = keyfile.replace("/entitlement/", "/entitlement-host/")
+    SSL_CLIENT_CERT_FILE = certfile.replace("/entitlement/", "/entitlement-host/")
+
+    # Update selected environment variables based on the global variables.
     # These are used for templating container files and images.
     rpmver_globals_vars = [
-        'SOURCE_VERSION', 'SOURCE_VERSION_BASE'
+        'SOURCE_VERSION', 'SOURCE_VERSION_BASE', 'SOURCE_IMAGES',
+        'SSL_CLIENT_KEY_FILE', 'SSL_CLIENT_CERT_FILE'
     ]
     for var in rpmver_globals_vars:
         value = globals().get(var)
@@ -170,7 +178,10 @@ def extract_container_images(version, repo_spec, outfile, dry_run=False):
         dnf_options.extend(["--repofrompath", f"{repo_name},{repo_spec}", "--repo", repo_name])
     elif re.match(r'^/.*', repo_spec):
         # If the spec is a path, set up the arguments to point to that path.
-        dnf_options.extend(["--repofrompath", f"{repo_name},{repo_spec}", "--repo", repo_name])
+        # Disabling dnf strict option and refreshing cache are required because the
+        # download command does not run elevated.
+        dnf_options.extend(["--repofrompath", f"{repo_name},{repo_spec}", "--repo", repo_name,
+                            "--setopt=strict=False", "--refresh"])
     elif repo_spec:
         # If the spec is a name, assume it is already known to the
         # system through normal configuration. The repo does not need
@@ -178,7 +189,7 @@ def extract_container_images(version, repo_spec, outfile, dry_run=False):
         dnf_options.extend(["--repo", repo_spec])
 
     # Construct and execute the dnf download command
-    dnf_command = ["sudo", "dnf", "download"] + dnf_options + [f"microshift-release-info-{version}"]
+    dnf_command = ["dnf", "download"] + dnf_options + [f"microshift-release-info-{version}"]
     if common.run_command(dnf_command, dry_run) is not None:
         images_output = get_container_images(str(image_path), version)
         with open(outfile, "a") as f:
@@ -187,7 +198,7 @@ def extract_container_images(version, repo_spec, outfile, dry_run=False):
 
         # Cleanup RPM files
         rpm_list = list(map(str, image_path.glob("microshift-release-info-*.rpm")))
-        common.run_command(["sudo", "rm", "-f"] + rpm_list, dry_run)
+        common.run_command(["rm", "-f"] + rpm_list, dry_run)
     # Restore the current directory
     common.popd()
 
@@ -211,54 +222,53 @@ def get_process_file_names(idir, ifile, obasedir):
 
 
 def process_containerfile(groupdir, containerfile, dry_run):
-    cf_path, cf_outname, cf_outdir, cf_logfile = get_process_file_names(
+    cf_path, cf_outname, _, cf_logfile = get_process_file_names(
         groupdir, containerfile, BOOTC_IMAGE_DIR)
-    cf_targetimg = os.path.join(cf_outdir, "manifest.json")
 
-    # Check if the target artifact exists
-    if should_skip(cf_targetimg):
-        common.record_junit(cf_path, "process-container", "SKIPPED")
-        return
-
-    # Create the output directories
-    os.makedirs(cf_outdir, exist_ok=True)
     # Run template command on the input file
     cf_outfile = os.path.join(BOOTC_IMAGE_DIR, containerfile)
     run_template_cmd(cf_path, cf_outfile, dry_run)
+    # Templating may generate an empty file
+    if not dry_run:
+        if not common.file_has_valid_lines(cf_outfile):
+            common.print_msg(f"Skipping an empty {containerfile} file")
+            return
 
     common.print_msg(f"Processing {containerfile} with logs in {cf_logfile}")
+    start_process_container = time.time()
     try:
         # Redirect the output to the log file
         with open(cf_logfile, 'w') as logfile:
             # Run the container build command
+            # Note:
+            # - The pull secret is necessary in some builds for pulling embedded
+            #   container images specified by SOURCE_IMAGES environment variable
+            # - The explicit push-to-mirror sets the 'latest' tag as all the build
+            #   layers are in the mirror due to 'cache-to' option
             build_args = [
                 "sudo", "podman", "build",
                 "--authfile", PULL_SECRET,
+                "--secret", f"id=pullsecret,src={PULL_SECRET}",
+                "--cache-to", f"{MIRROR_REGISTRY}/{cf_outname}",
+                "--cache-from", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "-t", cf_outname, "-f", cf_outfile,
                 IMAGEDIR
             ]
+            start = time.time()
             common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
-            common.record_junit(cf_path, "build-container", "OK")
+            common.record_junit(cf_path, "build-container", "OK", start)
 
-            # Run the container export command
-            if os.path.exists(cf_outdir):
-                shutil.rmtree(cf_outdir)
-            save_args = [
-                "sudo", "podman", "save",
-                "--format", "docker-dir",
-                "-o", cf_outdir, cf_outname
+            push_args = [
+                "sudo", "podman", "push",
+                "--authfile", PULL_SECRET,
+                cf_outname,
+                f"{MIRROR_REGISTRY}/{cf_outname}"
             ]
-            common.run_command_in_shell(save_args, dry_run, logfile, logfile)
-            common.record_junit(cf_path, "save-container", "OK")
-
-            # Fix the directory ownership and move the artifact
-            if not dry_run:
-                common.run_command(
-                    ["sudo", "chown", "-R", f"{getpass.getuser()}.", cf_outdir],
-                    dry_run)
-                common.record_junit(cf_path, "chown-container", "OK")
+            start = time.time()
+            common.retry_on_exception(3, common.run_command_in_shell, push_args, dry_run, logfile, logfile)
+            common.record_junit(cf_path, "push-container", "OK", start)
     except Exception:
-        common.record_junit(cf_path, "process-container", "FAILED")
+        common.record_junit(cf_path, "process-container", "FAILED", start_process_container, log_filepath=cf_logfile)
         # Propagate the exception to the caller
         raise
     finally:
@@ -270,6 +280,16 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
     bf_path, bf_outname, bf_outdir, bf_logfile = get_process_file_names(
         groupdir, bootcfile, BOOTC_ISO_DIR)
     bf_targetiso = os.path.join(VM_DISK_BASEDIR, f"{bf_outname}.iso")
+
+    def should_skip(file):
+        # Forcing the rebuild if needed
+        if FORCE_REBUILD:
+            common.print_msg(f"Forcing rebuild of '{file}'")
+            return False
+        if not os.path.exists(file):
+            return False
+        common.print_msg(f"The '{file}' already exists, skipping")
+        return True
 
     # Check if the target artifact exists
     if should_skip(bf_targetiso):
@@ -284,6 +304,7 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
     run_template_cmd(bf_path, bf_outfile, dry_run)
 
     common.print_msg(f"Processing {bootcfile} with logs in {bf_logfile}")
+    start_process_bootc_image = time.time()
     try:
         # Redirect the output to the log file
         with open(bf_logfile, 'w') as logfile:
@@ -293,8 +314,9 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
                 "sudo", "podman", "pull",
                 "--authfile", PULL_SECRET, BIB_IMAGE
             ]
+            start = time.time()
             common.retry_on_exception(3, common.run_command_in_shell, pull_args, dry_run, logfile, logfile)
-            common.record_junit(bf_path, "pull-bootc-bib", "OK")
+            common.record_junit(bf_path, "pull-bootc-bib", "OK", start)
 
             # Read the image reference
             bf_imgref = common.read_file(bf_outfile).strip()
@@ -305,8 +327,9 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
                     "sudo", "podman", "pull",
                     "--authfile", PULL_SECRET, bf_imgref
                 ]
+                start = time.time()
                 common.retry_on_exception(3, common.run_command_in_shell, pull_args, dry_run, logfile, logfile)
-                common.record_junit(bf_path, "pull-bootc-image", "OK")
+                common.record_junit(bf_path, "pull-bootc-image", "OK", start)
 
             # The podman command with security elevation and
             # mount of output / container storage
@@ -325,10 +348,11 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
                 "--local",
                 bf_imgref
             ]
+            start = time.time()
             common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
-            common.record_junit(bf_path, "build-bootc-image", "OK")
+            common.record_junit(bf_path, "build-bootc-image", "OK", start)
     except Exception:
-        common.record_junit(bf_path, "process-bootc-image", "FAILED")
+        common.record_junit(bf_path, "process-bootc-image", "FAILED", start_process_bootc_image, log_filepath=bf_logfile)
         # Propagate the exception to the caller
         raise
     finally:
@@ -344,93 +368,89 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
 
 
 def process_container_encapsulate(groupdir, containerfile, dry_run):
-    ce_path, ce_outname, ce_outdir, ce_logfile = get_process_file_names(
+    ce_path, ce_outname, _, ce_logfile = get_process_file_names(
         groupdir, containerfile, BOOTC_IMAGE_DIR)
-    ce_targetimg = os.path.join(ce_outdir, "manifest.json")
-    ce_tagname = "build_image_tag"
-    ce_tagval = f"localhost/{ce_outname}:latest"
+    ce_targetimg = f"{MIRROR_REGISTRY}/{ce_outname}:latest"
+    ce_localimg = f"localhost/{ce_outname}:latest"
 
-    def get_images_by_label():
-        images_args = [
-            "sudo", "podman", "images",
-            "--filter", f"label={ce_tagname}={ce_tagval}",
-            "--format", "{{.ID}}"
+    def ostree_rev_in_registry(ce_imgref):
+        # Forcing the rebuild if needed
+        if FORCE_REBUILD:
+            common.print_msg(f"Forcing rebuild of '{ce_imgref}'")
+            return False
+
+        # Read the commit revision from the ostree repository (must succeed)
+        src_ref_cmd = [
+            "ostree", "rev-parse",
+            "--repo", os.path.join(IMAGEDIR, "repo"),
+            ce_imgref
         ]
-        imgids = common.run_command_in_shell(images_args, dry_run)
-        # Make sure the ids are normalized in a single line
-        return re.sub(r'\s+', ' ', imgids)
+        src_ref = common.run_command_in_shell(src_ref_cmd, dry_run)
+        if not src_ref:
+            raise Exception(f"Failed to find ostree revision with '{ce_imgref}' reference")
 
-    # Check if the target artifact exists
-    if should_skip(ce_targetimg):
-        common.record_junit(ce_path, "process-container-encapsulate", "SKIPPED")
-        return
+        # Read the commit revision from the registry (may fail, no error output)
+        try:
+            dst_ref_cmd = [
+                "skopeo", "inspect",
+                "--authfile", PULL_SECRET,
+                f"docker://{ce_targetimg}",
+                "2>/dev/null", "|",
+                "jq", "-r", "'.Labels[\"ostree.commit\"]'"
+            ]
+            dst_ref = common.run_command_in_shell(dst_ref_cmd, dry_run)
+            if src_ref == dst_ref:
+                common.print_msg(f"The '{ce_targetimg}' already exists, skipping")
+                return True
+        except Exception:
+            None
+        return False
 
-    # Create the output directories
-    os.makedirs(ce_outdir, exist_ok=True)
     # Run template command on the input file
     ce_outfile = os.path.join(BOOTC_IMAGE_DIR, containerfile)
     run_template_cmd(ce_path, ce_outfile, dry_run)
 
     common.print_msg(f"Processing {containerfile} with logs in {ce_logfile}")
+    start_process_container_encapsulate = time.time()
     try:
         # Redirect the output to the log file
         with open(ce_logfile, 'w') as logfile:
             # Read the image reference
             ce_imgref = common.read_file(ce_outfile).strip()
+            # Check if the target artifact already exists in registry with
+            # the same ostree commit
+            if ostree_rev_in_registry(ce_imgref):
+                common.record_junit(ce_path, "process-container-encapsulate", "SKIPPED")
+                return
 
-            # Run the container image build command, also adding a label
-            # to the generated image
+            # Run the container image build command.
+            # The REGISTRY_AUTH_FILE setting is required for skopeo to succeed
+            # in accessing container registries that might require authentication.
             build_args = [
-                "sudo", "rpm-ostree", "compose",
+                "sudo", f"REGISTRY_AUTH_FILE={PULL_SECRET}",
+                "rpm-ostree", "compose",
                 "container-encapsulate",
-                "--label", f"{ce_tagname}={ce_tagval}",
                 "--repo", os.path.join(IMAGEDIR, "repo"),
                 ce_imgref,
-                f"dir:{ce_outdir}"
+                f"registry:{ce_targetimg}"
             ]
+            start = time.time()
             common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
-            common.record_junit(ce_path, "build-container", "OK")
+            common.record_junit(ce_path, "build-container", "OK", start)
 
-            # Fix the directory ownership
-            if not dry_run:
-                common.run_command(
-                    ["sudo", "chown", "-R", f"{getpass.getuser()}.", ce_outdir],
-                    dry_run)
-                common.record_junit(ce_path, "chown-container", "OK")
-
-            # Cleanup previously loaded images if any
-            imgids = get_images_by_label()
-            if imgids:
-                clean_args = [
-                    "sudo", "podman",
-                    "rmi", "-f", imgids
-                ]
-                common.run_command_in_shell(clean_args, dry_run, logfile, logfile)
-                common.record_junit(ce_path, "cleanup-image", "OK")
-
-            # Run the container import command, which might be necessary for
-            # subsequent builds that depend on this container image
-            load_args = [
-                "sudo", "podman", "load",
-                "-i", ce_outdir
+            # Copy the image into the local containers storage as it might be
+            # necessary for subsequent builds that depend on this container image
+            copy_args = [
+                "sudo", "skopeo", "copy",
+                "--authfile", PULL_SECRET,
+                f"docker://{ce_targetimg}",
+                f"containers-storage:{ce_localimg}"
             ]
-            common.run_command_in_shell(load_args, dry_run, logfile, logfile)
-            common.record_junit(ce_path, "load-image", "OK")
-
-            # Get the loaded image ID
-            imgid = get_images_by_label()
-            if not imgid and not dry_run:
-                raise Exception(f"Failed to find image ID for {ce_tagname}={ce_tagval} label")
-
-            # Tag the loaded image
-            tag_args = [
-                "sudo", "podman", "tag",
-                imgid, ce_tagval
-            ]
-            common.run_command_in_shell(tag_args, dry_run, logfile, logfile)
-            common.record_junit(ce_path, "tag-image", "OK")
+            start = time.time()
+            common.retry_on_exception(3, common.run_command_in_shell, copy_args, dry_run, logfile, logfile)
+            common.record_junit(ce_path, "copy-image", "OK", start)
     except Exception:
-        common.record_junit(ce_path, "process-container-encapsulate", "FAILED")
+        common.record_junit(ce_path, "process-container-encapsulate", "FAILED", start_process_container_encapsulate, log_filepath=ce_logfile)
         # Propagate the exception to the caller
         raise
     finally:
@@ -523,7 +543,7 @@ def main():
             raise Exception(f"The input directory '{dir2process}' does not exist")
         # Make sure the local RPM repository exists
         if not os.path.isdir(LOCAL_REPO):
-            raise Exception("Run create_local_repo.sh before building images")
+            common.run_command([f"{SCRIPTDIR}/build_rpms.sh"], args.dry_run)
         # Initialize force rebuild option
         global FORCE_REBUILD
         if args.force_rebuild:
@@ -548,6 +568,20 @@ def main():
             extract_container_images(f"4.{FAKE_NEXT_MINOR_VERSION}.*", NEXT_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(PREVIOUS_RELEASE_VERSION, PREVIOUS_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(YMINUS2_RELEASE_VERSION, YMINUS2_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
+        # Process package source templates
+        ipkgdir = f"{SCRIPTDIR}/../package-sources-bootc"
+        for ifile in os.listdir(ipkgdir):
+            # Create full path for output and input file names
+            ofile = os.path.join(BOOTC_IMAGE_DIR, ifile)
+            ifile = os.path.join(ipkgdir, ifile)
+            run_template_cmd(ifile, ofile, args.dry_run)
+        # Run the mirror registry
+        common.run_command([f"{SCRIPTDIR}/mirror_registry.sh"], args.dry_run)
+        # Add local registry credentials to the input pull secret file
+        global PULL_SECRET
+        opull_secret = os.path.join(BOOTC_IMAGE_DIR, "pull_secret.json", )
+        common.update_pull_secret(PULL_SECRET, opull_secret, MIRROR_REGISTRY)
+        PULL_SECRET = opull_secret
         # Process individual group directory
         if args.group_dir:
             process_group(args.group_dir, args.build_type, args.dry_run)
@@ -571,4 +605,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _ = common.MeasureRunTimeInScope("[MAIN] Building Images")
     main()

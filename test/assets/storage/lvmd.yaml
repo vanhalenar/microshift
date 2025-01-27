@@ -1,0 +1,13 @@
+device-classes:
+- name: default
+  volume-group: ${lvmd_vg}
+  spare-gb: 0
+  default: true
+- name: thin
+  volume-group: ${lvmd_vg}
+  spare-gb: 0
+  default: false
+  type: thin
+  thin-pool:
+    name: thin
+    overprovision-ratio: 10.0

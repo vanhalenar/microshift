@@ -15,18 +15,20 @@ SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 source "${SCRIPTDIR}/common.sh"
 # shellcheck source=test/bin/common_versions.sh
 source "${SCRIPTDIR}/common_versions.sh"
+# shellcheck source=test/bin/scenario_container.sh
+source "${SCRIPTDIR}/scenario_container.sh"
 
 DEFAULT_BOOT_BLUEPRINT="rhel-9.4"
 LVM_SYSROOT_SIZE="10240"
-WEB_SERVER_URL="http://${VM_BRIDGE_IP}:${WEB_SERVER_PORT}"
-BOOTC_REGISTRY_URL="${VM_BRIDGE_IP}:5000"
 PULL_SECRET="${PULL_SECRET:-${HOME}/.pull-secret.json}"
 PULL_SECRET_CONTENT="$(jq -c . "${PULL_SECRET}")"
 VM_BOOT_TIMEOUT=1200 # Overall total boot times are around 15m
 VM_GREENBOOT_TIMEOUT=1800 # Greenboot readiness may take up to 15-30m depending on the load
-ENABLE_REGISTRY_MIRROR=${ENABLE_REGISTRY_MIRROR:-false}
 SKIP_SOS=${SKIP_SOS:-false}  # may be overridden in global settings file
 SKIP_GREENBOOT=${SKIP_GREENBOOT:-false}  # may be overridden in scenario file
+# Container image signature verification should be disabled by default in the
+# main branch because not all the images are signed
+IMAGE_SIGSTORE_ENABLED=false # may be overridden in scenario file
 VNC_CONSOLE=${VNC_CONSOLE:-false}  # may be overridden in global settings file
 TEST_RANDOMIZATION="all"  # may be overridden in scenario file
 TEST_EXECUTION_TIMEOUT="30m" # may be overriden in scenario file
@@ -241,16 +243,23 @@ EOF
 #                     first on the host. This usually matches an image
 #                     blueprint name.
 #  fips_enabled -- Enable FIPS mode (true or false).
+#  ipv6_only -- Only use IPv6 single stack configuration by explicitly
+#               disabling IPv4 (true or false)
 prepare_kickstart() {
     local vmname="$1"
     local template="$2"
     local boot_commit_ref="$3"
     local fips_enabled=${4:-false}
+    local ipv6_only=${5:-false}
 
     local -r full_vmname="$(full_vm_name "${vmname}")"
     local -r output_dir="${SCENARIO_INFO_DIR}/${SCENARIO}/vms/${vmname}"
     local -r vm_hostname="${full_vmname/./-}"
     local -r hostname=$(hostname)
+    local ipv6_opt=""
+    if ${ipv6_only} ; then
+        ipv6_opt="--noipv4 --ipv6 auto"
+    fi
 
     validate_vm_hostname "${vm_hostname}"
 
@@ -259,6 +268,15 @@ prepare_kickstart() {
         error "No ${template} in ${KICKSTART_TEMPLATE_DIR}"
         record_junit "${vmname}" "prepare_kickstart" "no-template"
         exit 1
+    fi
+
+    # For bootc kickstart templates, make sure that commit references are
+    # fully qualified. Unqualified references are assumed to be served from
+    # the local mirror registry.
+    if [[ "${template}" == *bootc* ]] ; then
+        if [ "$(dirname "${boot_commit_ref}")" == "." ] ; then
+            boot_commit_ref="${MIRROR_REGISTRY_URL}/${boot_commit_ref}"
+        fi
     fi
 
     mkdir -p "${output_dir}"
@@ -273,17 +291,19 @@ prepare_kickstart() {
 
         sed -e "s|REPLACE_LVM_SYSROOT_SIZE|${LVM_SYSROOT_SIZE}|g" \
             -e "s|REPLACE_OSTREE_SERVER_URL|${WEB_SERVER_URL}/repo|g" \
-            -e "s|REPLACE_BOOTC_REGISTRY_URL|${BOOTC_REGISTRY_URL}|g" \
+            -e "s|REPLACE_BOOTC_REGISTRY_URL|${MIRROR_REGISTRY_URL}|g" \
             -e "s|REPLACE_RPM_SERVER_URL|${WEB_SERVER_URL}/rpm-repos|g" \
             -e "s|REPLACE_MINOR_VERSION|${MINOR_VERSION}|g" \
             -e "s|REPLACE_BOOT_COMMIT_REF|${boot_commit_ref}|g" \
             -e "s|REPLACE_PULL_SECRET|${PULL_SECRET_CONTENT}|g" \
             -e "s|REPLACE_HOST_NAME|${vm_hostname}|g" \
+            -e "s|REPLACE_IPV6_ONLY|${ipv6_opt}|g" \
             -e "s|REPLACE_REDHAT_AUTHORIZED_KEYS|${REDHAT_AUTHORIZED_KEYS}|g" \
             -e "s|REPLACE_FIPS_ENABLED|${fips_enabled}|g" \
-            -e "s|REPLACE_ENABLE_MIRROR|${ENABLE_REGISTRY_MIRROR}|g" \
             -e "s|REPLACE_MIRROR_HOSTNAME|${hostname}|g" \
+            -e "s|REPLACE_MIRROR_PORT|${MIRROR_REGISTRY_PORT}|g" \
             -e "s|REPLACE_VM_BRIDGE_IP|${VM_BRIDGE_IP}|g" \
+            -e "s|REPLACE_IMAGE_SIGSTORE_ENABLED|${IMAGE_SIGSTORE_ENABLED}|g" \
             "${ifile}" > "${output_file}"
     done
     record_junit "${vmname}" "prepare_kickstart" "OK"
@@ -294,6 +314,17 @@ does_commit_exist() {
     local -r commit="${1}"
 
     if ostree refs --repo "${IMAGEDIR}/repo" | grep -q "${commit}"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Checks if provided image ref exists in local image storage
+does_image_exist() {
+    local -r image="${1}"
+
+    if [[ "$(sudo podman images -q "${image}")" != "" ]]; then
         return 0
     else
         return 1
@@ -423,21 +454,20 @@ EOF
 # Public function to start a VM.
 #
 # Creates a new VM using the scenario name and the vmname given to
-# create a unique name. Uses the boot_blueprint and network_name
-# arguments to select the ISO and network from which to boot.
+# create a unique name. Uses the boot_blueprint and network
+# arguments to select the ISO and networks from which to boot.
 # If no boot_blueprint is specified, uses DEFAULT_BOOT_BLUEPRINT.
-# If no network_name is specified, uses the "default" network.
+# If no network is specified, uses the "default" network.
 #
 # Usage: launch_vm \
 #           [--vmname <name>] \
 #           [--boot_blueprint <blueprint>] \
-#           [--network_name <name>] \
+#           [--network <name>[,<name>...]] \
 #           [--vm_vcpus <vcpus>] \
 #           [--vm_memory <memory>] \
 #           [--vm_disksize <disksize>] \
-#           [--vm_nics <nics>] \
 #           [--fips] \
-#           [--bootc]
+#           [--no_network]
 #
 # Arguments:
 #   [--vmname <name>]: The short name of the VM in the scenario (e.g., "host1").
@@ -445,31 +475,31 @@ EOF
 #                                   should be used to boot the VM. This is _not_
 #                                   necessarily the image to be installed (see
 #                                   prepare_kickstart).
-#   [--network_name <name>]: The name of the network used when creating the VM.
+#   [--network <name>[,<name>...]]: A comma-separated list for the networks used
+#                                   when creating the VM. Each network entry will
+#                                   create a NIC and they are repeatable.
+#   [--no-network]: Do not configure any network attachments (and therefore no
+#                   NICs) for the VM.
 #   [--vm_vcpus <vcpus>]: Number of vCPUs for the VM.
 #   [--vm_memory <memory>]: Size of RAM in MB for the VM.
 #   [--vm_disksize <disksize>]: Size of disk in GB for the VM.
-#   [--vm_nics <nics>]: Number of network interfaces for the VM.
 #   [--fips]: Enable FIPS mode
-#   [--bootc]: Enable bootc mode
 
 launch_vm() {
     # set defaults
     local vmname="host1"
     local boot_blueprint="${DEFAULT_BOOT_BLUEPRINT}"
-    local network_name="default"
+    local network="default"
     local vm_memory=4096
     local vm_vcpus=2
     local vm_disksize=20
-    local vm_nics=1
     local fips_mode=0
-    local bootc_mode=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            --vmname|--boot_blueprint|--network_name|--vm_vcpus|--vm_memory|--vm_disksize|--vm_nics)
+            --vmname|--boot_blueprint|--vm_vcpus|--vm_memory|--vm_disksize)
                 var="${1/--/}"
-                if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then 
+                if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
                     declare "${var}=$2"
                     shift 2
                 else
@@ -478,16 +508,26 @@ launch_vm() {
                     exit 1
                 fi
                 ;;
+            --network)
+                if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+                    network="${2//,/ }"
+                    shift 2
+                else
+                    error "Failed parsing network argument: value not set"
+                    record_junit "${vmname}" "vm-launch-args" "FAILED"
+                    exit 1
+                fi
+                ;;
+            --no_network)
+                network=""
+                shift
+                ;;
             --fips)
                 fips_mode=1
                 shift
                 ;;
-            --bootc)
-                bootc_mode=1
-                shift
-                ;;
             *)
-                error "Invalid argument: ${1}" 
+                error "Invalid argument: ${1}"
                 record_junit "${vmname}" "vm-launch-args" "FAILED"
                 exit 1
                 ;;
@@ -533,16 +573,6 @@ launch_vm() {
     vm_extra_args="fips=${fips_mode}"
     vm_initrd_inject=""
 
-    # Add support of bootc image directory sharing with virtual machines
-    if [ "${bootc_mode}" -ne 0 ] ; then
-        # The ISO files generated by bootc-image-builder is not recognized by virt-install.
-        # Work around the problem by specifying kernel and initrd paths.
-        if [[ "${boot_blueprint}.iso" == *-bootc.iso ]] ; then
-            vm_loc_args+=",kernel=images/pxeboot/vmlinuz,initrd=images/pxeboot/initrd.img"
-            vm_loc_args+=" --osinfo detect=on"
-        fi
-    fi
-
     # Specify the right console device per each platform. The baud rate
     # setting boost may result in slightly improved speed.
     # The device name is a mandatory option on x86_64 to get the console
@@ -567,8 +597,14 @@ launch_vm() {
         vm_extra_args+=" inst.cmdline"
     fi
 
-    for _ in $(seq "${vm_nics}") ; do
-        vm_network_args+="--network network=${network_name},model=virtio "
+    for n in ${network}; do
+        # For simplicity we assume that network filters are named the same as the networks
+        # If there is a filter with the same name as the network, attach it to the NIC
+        vm_network_args+="--network network=${n},model=virtio"
+        if sudo virsh nwfilter-list | awk '{print $2}' | grep -qx "${n}"; then
+            vm_network_args+=",filterref=${n}"
+        fi
+        vm_network_args+=" "
     done
     if [ -z "${vm_network_args}" ] ; then
         vm_network_args="--network none"
@@ -629,7 +665,7 @@ launch_vm() {
         fi
 
         # Check if VM creation should be retried
-        ((attempt++))
+        ((attempt++)) || true
         if [ ${attempt} -gt ${max_attempts} ] ; then
             echo "Error running virt-install: giving up on attempt ${attempt}"
             break
@@ -662,7 +698,7 @@ launch_vm() {
     sudo virsh start "${full_vmname}"
 
     # If there is at least 1 NIC attached, wait for an IP to be assigned and poll for SSH access
-    if  [ "${vm_nics}" -gt 0 ]; then
+    if  [ -n "${network}" ]; then
         # Wait for an IP to be assigned
         echo "Waiting for VM ${full_vmname} to have an IP"
         local -r ip=$(get_vm_ip "${full_vmname}")
@@ -678,13 +714,12 @@ launch_vm() {
         # Record the IP of this VM so our caller can use it to configure
         # port forwarding and the firewall.
         set_vm_property "${vmname}" "ip" "${ip}"
-        
+
         # Set the defaults for the various ports so that connections
         # from the hypervisor to the VM work.
         set_vm_property "${vmname}" "ssh_port" "22"
         set_vm_property "${vmname}" "api_port" "6443"
         set_vm_property "${vmname}" "lb_port" "5678"
-        
 
         if wait_for_ssh "${ip}"; then
             record_junit "${vmname}" "ssh-access" "OK"
@@ -757,6 +792,7 @@ configure_vm_firewall() {
     # - On-host pod communication
     run_command_on_vm "${vmname}" "sudo firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16"
     run_command_on_vm "${vmname}" "sudo firewall-cmd --permanent --zone=trusted --add-source=169.254.169.1"
+    run_command_on_vm "${vmname}" "sudo firewall-cmd --permanent --zone=trusted --add-source=fd01::/48"
 
     # Networking / firewall configuration instructions
     # - Incoming for the router
@@ -776,8 +812,7 @@ configure_vm_firewall() {
 # Function to report the full version of locally built RPMs, e.g. "4.17.0"
 local_rpm_version() {
     if [ ! -d "${LOCAL_REPO}" ]; then
-        error "Run ${SCRIPTDIR}/create_local_repo.sh before running this scenario."
-        return 1
+        "${TESTDIR}/bin/build_rpms.sh"
     fi
 
     local -r release_info_rpm=$(find "${LOCAL_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
@@ -831,9 +866,10 @@ run_tests() {
     echo "Running tests with $# args" "$@"
 
     if [ ! -d "${RF_VENV}" ]; then
-        error "RF_VENV (${RF_VENV}) does not exist, create it with: ${ROOTDIR}/scripts/fetch_tools.sh robotframework"
-        record_junit "${vmname}" "robot_framework_environment" "FAILED"
-        exit 1
+        "${ROOTDIR}/scripts/fetch_tools.sh" "robotframework" || {
+            record_junit "${vmname}" "robot_framework_environment" "FAILED"
+            exit 1
+        }
     fi
     record_junit "${vmname}" "robot_framework_environment" "OK"
     local rf_binary="${RF_VENV}/bin/robot"
@@ -845,11 +881,11 @@ run_tests() {
     record_junit "${vmname}" "robot_framework_installed" "OK"
 
     # Make sure oc command is available
-    if ! command -v oc &> /dev/null
-    then
-        error "OpenShift Client package not installed, install it with ${ROOTDIR}/scripts/fetch_tools.sh oc"
-        record_junit "${vmname}" "oc_installed" "FAILED"
-        exit 1
+    if ! command -v oc &> /dev/null ; then
+        "${ROOTDIR}/scripts/fetch_tools.sh" "oc" || {
+            record_junit "${vmname}" "oc_installed" "FAILED"
+            exit 1
+        }
     fi
     record_junit "${vmname}" "oc_installed" "OK"
 
@@ -974,6 +1010,19 @@ load_subscription_manager_plugin() {
     source "${SUBSCRIPTION_MANAGER_PLUGIN}"
 }
 
+# Check if dependencies are running, and if not, start them
+#   - nginx server
+#   - registry mirror
+check_dependencies() {
+    if [ $(pgrep -cx -U "$(id -u)" nginx) -eq 0 ] ; then
+        "${TESTDIR}/bin/manage_webserver.sh" "start"
+    fi
+
+    if ! sudo podman ps --format '{{.Names}}' | grep -q ^microshift-quay  ; then
+        "${TESTDIR}/bin/mirror_registry.sh"
+    fi
+}
+
 action_create() {
     start_junit
     trap "close_junit" EXIT
@@ -1005,6 +1054,8 @@ action_create() {
         [ "${rc}" -ne 0 ] && record_junit "setup" "scenario_create_vms" "FAILED" ; \
         sos_report true || rc=1 ; \
         close_junit ; exit "${rc}"' EXIT
+
+    check_dependencies
 
     scenario_create_vms
     record_junit "setup" "scenario_create_vms" "OK"
@@ -1056,6 +1107,8 @@ action_run() {
         [ "${rc}" -ne 0 ] && record_junit "run" "scenario_run_tests" "FAILED" ; \
         sos_report true || rc=1 ; \
         close_junit ; exit "${rc}"' EXIT
+
+    check_dependencies
 
     scenario_run_tests
     record_junit "run" "scenario_run_tests" "OK"

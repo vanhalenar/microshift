@@ -269,6 +269,7 @@ type ExternalPlatformSpec struct {
 // PlatformSpec holds the desired state specific to the underlying infrastructure provider
 // of the current cluster. Since these are used at spec-level for the underlying cluster, it
 // is supposed that only one of the spec structs is set.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.vsphere) && has(self.vsphere) ? size(self.vsphere.vcenters) < 2 : true",message="vcenters can have at most 1 item when configured post-install"
 type PlatformSpec struct {
 	// type is the underlying infrastructure provider for the cluster. This
 	// value controls whether infrastructure automation such as service load
@@ -506,6 +507,20 @@ type AWSPlatformStatus struct {
 	// +listType=atomic
 	// +optional
 	ResourceTags []AWSResourceTag `json:"resourceTags,omitempty"`
+
+	// cloudLoadBalancerConfig holds configuration related to DNS and cloud
+	// load balancers. It allows configuration of in-cluster DNS as an alternative
+	// to the platform default DNS implementation.
+	// When using the ClusterHosted DNS type, Load Balancer IP addresses
+	// must be provided for the API and internal API load balancers as well as the
+	// ingress load balancer.
+	//
+	// +default={"dnsType": "PlatformDefault"}
+	// +kubebuilder:default={"dnsType": "PlatformDefault"}
+	// +openshift:enable:FeatureGate=AWSClusterHostedDNS
+	// +optional
+	// +nullable
+	CloudLoadBalancerConfig *CloudLoadBalancerConfig `json:"cloudLoadBalancerConfig,omitempty"`
 }
 
 // AWSResourceTag is a tag to apply to AWS resources created for the cluster.
@@ -646,12 +661,12 @@ type GCPPlatformStatus struct {
 	// Tombstone the field as a reminder.
 	// ClusterHostedDNS ClusterHostedDNS `json:"clusterHostedDNS,omitempty"`
 
-	// cloudLoadBalancerConfig is a union that contains the IP addresses of API,
-	// API-Int and Ingress Load Balancers created on the cloud platform. These
-	// values would not be populated on on-prem platforms. These Load Balancer
-	// IPs are used to configure the in-cluster DNS instances for API, API-Int
-	// and Ingress services. `dnsType` is expected to be set to `ClusterHosted`
-	// when these Load Balancer IP addresses are populated and used.
+	// cloudLoadBalancerConfig holds configuration related to DNS and cloud
+	// load balancers. It allows configuration of in-cluster DNS as an alternative
+	// to the platform default DNS implementation.
+	// When using the ClusterHosted DNS type, Load Balancer IP addresses
+	// must be provided for the API and internal API load balancers as well as the
+	// ingress load balancer.
 	//
 	// +default={"dnsType": "PlatformDefault"}
 	// +kubebuilder:default={"dnsType": "PlatformDefault"}
@@ -1147,8 +1162,30 @@ type VSpherePlatformLoadBalancer struct {
 	Type PlatformLoadBalancerType `json:"type,omitempty"`
 }
 
-// VSpherePlatformFailureDomainSpec holds the region and zone failure domain and
-// the vCenter topology of that failure domain.
+// The VSphereFailureDomainZoneType is a string representation of a failure domain
+// zone type. There are two supportable types HostGroup and ComputeCluster
+// +enum
+type VSphereFailureDomainZoneType string
+
+// The VSphereFailureDomainRegionType is a string representation of a failure domain
+// region type. There are two supportable types ComputeCluster and Datacenter
+// +enum
+type VSphereFailureDomainRegionType string
+
+const (
+	// HostGroupFailureDomainZone is a failure domain zone for a vCenter vm-host group.
+	HostGroupFailureDomainZone VSphereFailureDomainZoneType = "HostGroup"
+	// ComputeClusterFailureDomainZone is a failure domain zone for a vCenter compute cluster.
+	ComputeClusterFailureDomainZone VSphereFailureDomainZoneType = "ComputeCluster"
+	// DatacenterFailureDomainRegion is a failure domain region for a vCenter datacenter.
+	DatacenterFailureDomainRegion VSphereFailureDomainRegionType = "Datacenter"
+	// ComputeClusterFailureDomainRegion is a failure domain region for a vCenter compute cluster.
+	ComputeClusterFailureDomainRegion VSphereFailureDomainRegionType = "ComputeCluster"
+)
+
+// VSpherePlatformFailureDomainSpec holds the region and zone failure domain and the vCenter topology of that failure domain.
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=VSphereHostVMGroupZonal,rule="has(self.zoneAffinity) && self.zoneAffinity.type == 'HostGroup' ?  has(self.regionAffinity) && self.regionAffinity.type == 'ComputeCluster' : true",message="when zoneAffinity type is HostGroup, regionAffinity type must be ComputeCluster"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=VSphereHostVMGroupZonal,rule="has(self.zoneAffinity) && self.zoneAffinity.type == 'ComputeCluster' ?  has(self.regionAffinity) && self.regionAffinity.type == 'Datacenter' : true",message="when zoneAffinity type is ComputeCluster, regionAffinity type must be Datacenter"
 type VSpherePlatformFailureDomainSpec struct {
 	// name defines the arbitrary but unique name
 	// of a failure domain.
@@ -1172,6 +1209,21 @@ type VSpherePlatformFailureDomainSpec struct {
 	// +kubebuilder:validation:MaxLength=80
 	// +kubebuilder:validation:Required
 	Zone string `json:"zone"`
+
+	// regionAffinity holds the type of region, Datacenter or ComputeCluster.
+	// When set to Datacenter, this means the region is a vCenter Datacenter as defined in topology.
+	// When set to ComputeCluster, this means the region is a vCenter Cluster as defined in topology.
+	// +openshift:validation:featureGate=VSphereHostVMGroupZonal
+	// +optional
+	RegionAffinity *VSphereFailureDomainRegionAffinity `json:"regionAffinity,omitempty"`
+
+	// zoneAffinity holds the type of the zone and the hostGroup which
+	// vmGroup and the hostGroup names in vCenter corresponds to
+	// a vm-host group of type Virtual Machine and Host respectively. Is also
+	// contains the vmHostRule which is an affinity vm-host rule in vCenter.
+	// +openshift:validation:featureGate=VSphereHostVMGroupZonal
+	// +optional
+	ZoneAffinity *VSphereFailureDomainZoneAffinity `json:"zoneAffinity,omitempty"`
 
 	// server is the fully-qualified domain name or the IP address of the vCenter server.
 	// +kubebuilder:validation:Required
@@ -1205,13 +1257,16 @@ type VSpherePlatformTopology struct {
 	ComputeCluster string `json:"computeCluster"`
 
 	// networks is the list of port group network names within this failure domain.
-	// Currently, we only support a single interface per RHCOS virtual machine.
+	// If feature gate VSphereMultiNetworks is enabled, up to 10 network adapters may be defined.
+	// 10 is the maximum number of virtual network devices which may be attached to a VM as defined by:
+	// https://configmax.esp.vmware.com/guest?vmwareproduct=vSphere&release=vSphere%208.0&categories=1-0
 	// The available networks (port groups) can be listed using
 	// `govc ls 'network/*'`
-	// The single interface should be the absolute path of the form
+	// Networks should be in the form of an absolute path:
 	// /<datacenter>/network/<portgroup>.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxItems=1
+	// +openshift:validation:FeatureGateAwareMaxItems:featureGate="",maxItems=1
+	// +openshift:validation:FeatureGateAwareMaxItems:featureGate=VSphereMultiNetworks,maxItems=10
 	// +kubebuilder:validation:MinItems=1
 	// +listType=atomic
 	Networks []string `json:"networks"`
@@ -1257,6 +1312,74 @@ type VSpherePlatformTopology struct {
 	// +kubebuilder:validation:Pattern=`^/.*?/vm/.*?`
 	// +optional
 	Template string `json:"template,omitempty"`
+}
+
+// VSphereFailureDomainZoneAffinity contains the vCenter cluster vm-host group (virtual machine and host types)
+// and the vm-host affinity rule that together creates an affinity configuration for vm-host based zonal.
+// This configuration within vCenter creates the required association between a failure domain, virtual machines
+// and ESXi hosts to create a vm-host based zone.
+// +kubebuilder:validation:XValidation:rule="has(self.type) && self.type == 'HostGroup' ?  has(self.hostGroup) : !has(self.hostGroup)",message="hostGroup is required when type is HostGroup, and forbidden otherwise"
+// +union
+type VSphereFailureDomainZoneAffinity struct {
+	// type determines the vSphere object type for a zone within this failure domain.
+	// Available types are ComputeCluster and HostGroup.
+	// When set to ComputeCluster, this means the vCenter cluster defined is the zone.
+	// When set to HostGroup, hostGroup must be configured with hostGroup, vmGroup and vmHostRule and
+	// this means the zone is defined by the grouping of those fields.
+	// +kubebuilder:validation:Enum:=HostGroup;ComputeCluster
+	// +kubebuilder:validation:Required
+	// +unionDiscriminator
+	Type VSphereFailureDomainZoneType `json:"type"`
+
+	// hostGroup holds the vmGroup and the hostGroup names in vCenter
+	// corresponds to a vm-host group of type Virtual Machine and Host respectively. Is also
+	// contains the vmHostRule which is an affinity vm-host rule in vCenter.
+	// +unionMember
+	// +optional
+	HostGroup *VSphereFailureDomainHostGroup `json:"hostGroup,omitempty"`
+}
+
+// VSphereFailureDomainRegionAffinity contains the region type which is the string representation of the
+// VSphereFailureDomainRegionType with available options of Datacenter and ComputeCluster.
+// +union
+type VSphereFailureDomainRegionAffinity struct {
+	// type determines the vSphere object type for a region within this failure domain.
+	// Available types are Datacenter and ComputeCluster.
+	// When set to Datacenter, this means the vCenter Datacenter defined is the region.
+	// When set to ComputeCluster, this means the vCenter cluster defined is the region.
+	// +kubebuilder:validation:Enum:=ComputeCluster;Datacenter
+	// +kubebuilder:validation:Required
+	// +unionDiscriminator
+	Type VSphereFailureDomainRegionType `json:"type"`
+}
+
+// VSphereFailureDomainHostGroup holds the vmGroup and the hostGroup names in vCenter
+// corresponds to a vm-host group of type Virtual Machine and Host respectively. Is also
+// contains the vmHostRule which is an affinity vm-host rule in vCenter.
+type VSphereFailureDomainHostGroup struct {
+	// vmGroup is the name of the vm-host group of type virtual machine within vCenter for this failure domain.
+	// vmGroup is limited to 80 characters.
+	// This field is required when the VSphereFailureDomain ZoneType is HostGroup
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Required
+	VMGroup string `json:"vmGroup"`
+
+	// hostGroup is the name of the vm-host group of type host within vCenter for this failure domain.
+	// hostGroup is limited to 80 characters.
+	// This field is required when the VSphereFailureDomain ZoneType is HostGroup
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Required
+	HostGroup string `json:"hostGroup"`
+
+	// vmHostRule is the name of the affinity vm-host rule within vCenter for this failure domain.
+	// vmHostRule is limited to 80 characters.
+	// This field is required when the VSphereFailureDomain ZoneType is HostGroup
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Required
+	VMHostRule string `json:"vmHostRule"`
 }
 
 // VSpherePlatformVCenterSpec stores the vCenter connection fields.
@@ -1338,15 +1461,22 @@ type VSpherePlatformNodeNetworking struct {
 // use these fields for configuration.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.apiServerInternalIPs) || has(self.apiServerInternalIPs)",message="apiServerInternalIPs list is required once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.ingressIPs) || has(self.ingressIPs)",message="ingressIPs list is required once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.vcenters) && has(self.vcenters) ? size(self.vcenters) < 2 : true",message="vcenters can have at most 1 item when configured post-install"
 type VSpherePlatformSpec struct {
 	// vcenters holds the connection details for services to communicate with vCenter.
-	// Currently, only a single vCenter is supported.
+	// Currently, only a single vCenter is supported, but in tech preview 3 vCenters are supported.
+	// Once the cluster has been installed, you are unable to change the current number of defined
+	// vCenters except in the case where the cluster has been upgraded from a version of OpenShift
+	// where the vsphere platform spec was not present.  You may make modifications to the existing
+	// vCenters that are defined in the vcenters list in order to match with any added or modified
+	// failure domains.
 	// ---
 	// + If VCenters is not defined use the existing cloud-config configmap defined
 	// + in openshift-config.
 	// +kubebuilder:validation:MinItems=0
 	// +openshift:validation:FeatureGateAwareMaxItems:featureGate="",maxItems=1
 	// +openshift:validation:FeatureGateAwareMaxItems:featureGate=VSphereMultiVCenters,maxItems=3
+	// +kubebuilder:validation:XValidation:rule="size(self) != size(oldSelf) ? size(oldSelf) == 0 && size(self) < 2 : true",message="vcenters cannot be added or removed once set"
 	// +listType=atomic
 	// +optional
 	VCenters []VSpherePlatformVCenterSpec `json:"vcenters,omitempty"`
@@ -1473,7 +1603,7 @@ type VSpherePlatformStatus struct {
 // override existing defaults of IBM Cloud Services.
 type IBMCloudServiceEndpoint struct {
 	// name is the name of the IBM Cloud service.
-	// Possible values are: CIS, COS, DNSServices, GlobalSearch, GlobalTagging, HyperProtect, IAM, KeyProtect, ResourceController, ResourceManager, or VPC.
+	// Possible values are: CIS, COS, COSConfig, DNSServices, GlobalCatalog, GlobalSearch, GlobalTagging, HyperProtect, IAM, KeyProtect, ResourceController, ResourceManager, or VPC.
 	// For example, the IBM Cloud Private IAM service could be configured with the
 	// service `name` of `IAM` and `url` of `https://private.iam.cloud.ibm.com`
 	// Whereas the IBM Cloud Private VPC service for US South (Dallas) could be configured
@@ -1568,7 +1698,7 @@ type PowerVSServiceEndpoint struct {
 	// Power Cloud - https://cloud.ibm.com/apidocs/power-cloud
 	//
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+$`
+	// +kubebuilder:validation:Enum=CIS;COS;COSConfig;DNSServices;GlobalCatalog;GlobalSearch;GlobalTagging;HyperProtect;IAM;KeyProtect;Power;ResourceController;ResourceManager;VPC
 	Name string `json:"name"`
 
 	// url is fully qualified URI with scheme https, that overrides the default generated
@@ -1714,6 +1844,7 @@ type NutanixPlatformSpec struct {
 	// failureDomains configures failure domains information for the Nutanix platform.
 	// When set, the failure domains defined here may be used to spread Machines across
 	// prism element clusters to improve fault tolerance of the cluster.
+	// +openshift:validation:FeatureGateAwareMaxItems:featureGate=NutanixMultiSubnets,maxItems=32
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -1740,13 +1871,15 @@ type NutanixFailureDomain struct {
 	Cluster NutanixResourceIdentifier `json:"cluster"`
 
 	// subnets holds a list of identifiers (one or more) of the cluster's network subnets
+	// If the feature gate NutanixMultiSubnets is enabled, up to 32 subnets may be configured.
 	// for the Machine's VM to connect to. The subnet identifiers (uuid or name) can be
 	// obtained from the Prism Central console or using the prism_central API.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=1
-	// +listType=map
-	// +listMapKey=type
+	// +openshift:validation:FeatureGateAwareMaxItems:featureGate="",maxItems=1
+	// +openshift:validation:FeatureGateAwareMaxItems:featureGate=NutanixMultiSubnets,maxItems=32
+	// +openshift:validation:FeatureGateAwareXValidation:featureGate=NutanixMultiSubnets,rule="self.all(x, self.exists_one(y, x == y))",message="each subnet must be unique"
+	// +listType=atomic
 	Subnets []NutanixResourceIdentifier `json:"subnets"`
 }
 

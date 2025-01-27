@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 
 	configv1 "github.com/openshift/api/config/v1"
 	openshiftcontrolplanev1 "github.com/openshift/api/openshiftcontrolplane/v1"
@@ -75,7 +76,9 @@ func (s *OCPRouteControllerManager) configure(cfg *config.Config) error {
 					CertFile: cryptomaterial.ServingCertPath(servingCertDir),
 					KeyFile:  cryptomaterial.ServingKeyPath(servingCertDir),
 				},
-				ClientCA: cryptomaterial.TotalClientCABundlePath(cryptomaterial.CertsDirectory(config.DataDir)),
+				ClientCA:      cryptomaterial.TotalClientCABundlePath(cryptomaterial.CertsDirectory(config.DataDir)),
+				MinTLSVersion: cfg.ApiServer.TLS.MinVersion,
+				CipherSuites:  cfg.ApiServer.TLS.CipherSuites,
 			},
 		},
 		Controllers: []string{
@@ -99,7 +102,7 @@ func (s *OCPRouteControllerManager) configure(cfg *config.Config) error {
 	}
 
 	const namespace = "openshift-route-controller-manager"
-	builder := controllercmd.NewController(s.Name(), route_controller_manager.RunRouteControllerManager).
+	builder := controllercmd.NewController(s.Name(), route_controller_manager.RunRouteControllerManager, clock.RealClock{}).
 		WithKubeConfigFile(s.kubeconfig, nil).
 		WithComponentNamespace(namespace).
 		// Without an explicit owner reference, the builder will try using POD_NAME or the
@@ -187,9 +190,20 @@ func (s *OCPRouteControllerManager) Run(ctx context.Context, ready chan<- struct
 		close(ready)
 	}()
 
+	panicChannel := make(chan any, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicChannel <- r
+			}
+		}()
 		errc <- s.run(ctx)
 	}()
 
-	return <-errc
+	select {
+	case err := <-errc:
+		return err
+	case perr := <-panicChannel:
+		panic(perr)
+	}
 }

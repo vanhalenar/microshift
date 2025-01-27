@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openshift/library-go/pkg/crypto"
 	embedded "github.com/openshift/microshift/assets"
 	"github.com/openshift/microshift/pkg/assets"
 	"github.com/openshift/microshift/pkg/config"
@@ -97,8 +96,8 @@ func configure(ctx context.Context, cfg *config.Config) (args []string, applyFn 
 			"cluster-signing-cert-file":        {clusterSigningCert},
 			"cluster-signing-key-file":         {clusterSigningKey},
 			"v":                                {strconv.Itoa(cfg.GetVerbosity())},
-			"tls-cipher-suites":                {strings.Join(crypto.OpenSSLToIANACipherSuites(fixedTLSProfile.Ciphers), ",")},
-			"tls-min-version":                  {string(fixedTLSProfile.MinTLSVersion)},
+			"tls-cipher-suites":                {strings.Join(cfg.ApiServer.TLS.CipherSuites, ",")},
+			"tls-min-version":                  {cfg.ApiServer.TLS.MinVersion},
 		},
 	}
 
@@ -138,14 +137,27 @@ func (s *KubeControllerManager) Run(ctx context.Context, ready chan<- struct{}, 
 	// which expects to be called at most once in a process.
 	cmd := kubecm.NewControllerManagerCommand()
 	cmd.SetArgs(s.args)
+
+	panicChannel := make(chan any, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicChannel <- r
+			}
+		}()
 		errorChannel <- cmd.ExecuteContext(ctx)
 	}()
 
 	if err := s.applyFn(); err != nil {
 		return fmt.Errorf("failed to apply openshift namespaces: %w", err)
 	}
-	return <-errorChannel
+
+	select {
+	case err := <-errorChannel:
+		return err
+	case perr := <-panicChannel:
+		panic(perr)
+	}
 }
 
 func mergeAndConvertToArgs(overrides *kubecontrolplanev1.KubeControllerManagerConfig) ([]string, error) {

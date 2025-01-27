@@ -45,7 +45,9 @@ extract_container_images() {
         dnf_options="--repofrompath ${repo_name},${repo_spec} --repo ${repo_name}"
     elif [[ "${repo_spec}" =~ ^/.* ]]; then
         # If the spec is a path, set up the arguments to point to that path.
-        dnf_options="--repofrompath ${repo_name},${repo_spec} --repo ${repo_name}"
+        # Disabling dnf strict option and refreshing cache are required because the
+        # download command does not run elevated.
+        dnf_options="--repofrompath ${repo_name},${repo_spec} --repo ${repo_name} --setopt=strict=False --refresh"
     elif [[ -n ${repo_spec} ]]; then
         # If the spec is a name, assume it is already known to the
         # system through normal configuration. The repo does not need
@@ -54,9 +56,9 @@ extract_container_images() {
         dnf_options="--repo ${repo_spec}"
     fi
     # shellcheck disable=SC2086  # double quotes
-    sudo dnf download ${dnf_options} microshift-release-info-"${version}"
+    dnf download ${dnf_options} microshift-release-info-"${version}"
     get_container_images "${version}" "${IMAGEDIR}/release-info-rpms" | sed 's/,/\n/g' >> "${outfile}"
-    sudo rm -f microshift-release-info-*.rpm
+    rm -f microshift-release-info-*.rpm
     popd
 }
 
@@ -116,16 +118,25 @@ get_blueprint_name() {
     tomcli-get "${filename}" name
 }
 
-# Given a blueprint filename, extract the parent blue filename from
-# the prefix and use that to find the actual blueprint name that
-# composer knows.
+# Given a blueprint filename, extract the parent blueprint filename from the
+# prefix and use that to find the actual blueprint name that composer knows.
 #
 # rhel92-microshift-source -> rhel-9.2
 #
-# FIXME: We may need to change the prefix separator in the future if
-# we need a multi-level hierarchy.
+# The function also supports an explicit parent override directive in the
+# blueprint in the following format: '# parent = rhel-9.4-microshift-4.17'.
+# Note that the directive must be commented out in the blueprint to avoid
+# composer syntax errors.
+#
 get_image_parent() {
     local blueprint_filename="$1"
+
+    # Check for the parent override directive in the blueprint
+    local -r bparent=$(awk -F ' *= *' '/^# *parent *=/ {print $2}' "${blueprint_filename}")
+    if [ -n "${bparent}" ] ; then
+        echo "${bparent}" | xargs # remove quotes if any
+        return
+    fi
 
     local base
     base=$(basename "${blueprint_filename}" .toml)
@@ -327,7 +338,7 @@ do_group() {
         fi
 
         parent_args=""
-        parent=$(get_image_parent "${template}")
+        parent=$(get_image_parent "${blueprint_file}")
         if [ -n "${parent}" ]; then
             parent_args="--parent ${parent} --url http://${ip_addr_default}:${WEB_SERVER_PORT}/repo"
         fi
@@ -410,38 +421,41 @@ do_group() {
 
     # Run image-fetcher while osbuilder is running in background
     if [ ${#download_opts[@]} -ne 0 ]; then
-        local -r wget_tmp="wget.part"
-        local -r wget_res="${IMAGEDIR}/image_fetcher_result.json"
-        local -r wget_job="${IMAGEDIR}/image_fetcher_jobs.txt"
+        local -r dload_tmp="download.part"
+        local -r dload_res="${IMAGEDIR}/image_fetcher_result.json"
+        local -r dload_job="${IMAGEDIR}/image_fetcher_jobs.txt"
 
         local fetch_ok=true
         local progress=""
         if [ -t 0 ]; then
             progress="--progress"
         fi
-        # Download the files under temporary names
+        # Download the files under temporary names with 30s network timeout
+        # and retries. Note that download options are quoted per each job,
+        # resuting in one option per job in the download_opts array.
         echo "Waiting for image-fetcher to complete..."
         if parallel \
             ${progress} \
             --colsep ' ' \
-            --results "${wget_res}" \
-            --joblog "${wget_job}" \
-            --jobs $(( ${#download_opts[@]} / 2 )) \
-            wget -c -nv -O "{1}.${wget_tmp}" "{2}" ::: "${download_opts[@]}" ; then
+            --results "${dload_res}" \
+            --joblog "${dload_job}" \
+            --jobs ${#download_opts[@]} \
+            aria2c --max-connection-per-server=4 --split=4 --max-tries=3 --timeout=30 \
+                --continue --dir=/ -o "{1}.${dload_tmp}" "{2}" ::: "${download_opts[@]}" ; then
             # On successful download, rename the files to their original names
-            for fwget in "${VM_DISK_BASEDIR}"/*."${wget_tmp}" ; do
+            for dload_file in "${VM_DISK_BASEDIR}"/*."${dload_tmp}" ; do
                 local forig
-                forig="$(basename -s ".${wget_tmp}" "${fwget}")"
-                mv "${fwget}" "${VM_DISK_BASEDIR}/${forig}"
+                forig="$(basename -s ".${dload_tmp}" "${dload_file}")"
+                mv "${dload_file}" "${VM_DISK_BASEDIR}/${forig}"
             done
         else
             fetch_ok=false
         fi
 
         # Show the summary of the output of the parallel jobs.
-        cat "${wget_job}"
-        if [ -f "${wget_res}" ] ; then
-            jq < "${wget_res}"
+        cat "${dload_job}"
+        if [ -f "${dload_res}" ] ; then
+            jq < "${dload_res}"
         else
             echo "The image-fetcher results file does not exist"
             fetch_ok=false
@@ -666,8 +680,7 @@ fi
 # Determine the version of the RPM in the local repo so we can use it
 # in the blueprint templates.
 if [ ! -d "${LOCAL_REPO}" ]; then
-    error "Run ${SCRIPTDIR}/create_local_repo.sh before building images."
-    exit 1
+    "${TESTDIR}/bin/build_rpms.sh"
 fi
 release_info_rpm=$(find "${LOCAL_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
 if [ -z "${release_info_rpm}" ]; then
@@ -705,6 +718,11 @@ if ${EXTRACT_CONTAINER_IMAGES}; then
 fi
 
 trap 'osbuild_logs' EXIT
+
+# Check if webserver is running
+if [ $(pgrep -cx nginx) -eq 0 ] ; then
+    "${TESTDIR}/bin/manage_webserver.sh" "start"
+fi
 
 if [ -n "${LAYER}" ]; then
     for group in "${LAYER}"/group*; do

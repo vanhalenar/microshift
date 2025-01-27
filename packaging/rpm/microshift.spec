@@ -10,7 +10,7 @@
 
 # golang specifics
 # Needs to match go.mod go directive
-%global golang_version 1.20
+%global golang_version 1.23
 #debuginfo not supported with Go
 %global debug_package %{nil}
 # modifying the Go binaries breaks the DWARF debugging
@@ -34,6 +34,9 @@
 
 # Git related details
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
+
+# Don't build flannel subpackage by default
+%{!?with_flannel: %global with_flannel 0}
 
 Name: microshift
 Version: %{version}
@@ -61,8 +64,10 @@ BuildRequires: systemd
 BuildRequires: golang
 # DO NOT REMOVE
 
-Requires: cri-o >= 1.31.0, cri-o < 1.32.0
-Requires: cri-tools >= 1.31.0, cri-tools < 1.32.0
+# Temporarily relax cri-o and cri-tools version range between 1.31 and 1.33.
+# This needs to be fixed on 1.32 when both cri-o and cri-tools 1.32 is ready.
+Requires: cri-o >= 1.31.0, cri-o < 1.33.0
+Requires: cri-tools >= 1.31.0, cri-tools < 1.33.0
 Requires: iptables
 Requires: microshift-selinux = %{version}
 Requires: microshift-networking = %{version}
@@ -165,6 +170,28 @@ The microshift-multus-release-info package provides release information files fo
 release. These files contain the list of container image references used by
 the Multus CNI for MicroShift and can be used to embed those images into osbuilder blueprints.
 
+%if %{with_flannel}
+%package flannel
+Summary: flannel CNI for MicroShift
+ExclusiveArch: x86_64 aarch64
+Requires: microshift = %{version}
+
+%description flannel
+The microshift-flannel package provides the required manifests for the flannel CNI and the dependent
+kube-proxy to be installed on MicroShift.
+
+%package flannel-release-info
+Summary: Release information for flannel CNI for MicroShift
+BuildArch: noarch
+Requires: microshift-release-info = %{version}
+
+%description flannel-release-info
+The microshift-flannel-release-info package provides release information files for this
+release. These files contain the list of container image references used by the flannel CNI
+with the dependent kube-proxy for MicroShift and can be used to embed those images
+into osbuilder blueprints.
+%endif
+
 %package low-latency
 Summary: Baseline configuration for running low latency workload on MicroShift
 BuildArch: noarch
@@ -175,6 +202,24 @@ Requires: python3-pyyaml
 %description low-latency
 The microshift-low-latency package provides a baseline configuration prepared for
 running low latency workloads on MicroShift.
+
+%package gateway-api
+Summary: Gateway API for MicroShift
+ExclusiveArch: x86_64 aarch64
+Requires: microshift = %{version}
+
+%description gateway-api
+The microshift-gateway-api package provides the required manifests for the Gateway API to be installed on MicroShift.
+
+%package gateway-api-release-info
+Summary: Release information for Gateway API for MicroShift
+BuildArch: noarch
+Requires: microshift = %{version}
+
+%description gateway-api-release-info
+The microshift-gateway-api-release-info package provides release information files for this
+release. These files contain the list of container image references used by Gateway API
+and can be used to embed those images into osbuilder blueprints.
 
 %prep
 # Dynamic detection of the available golang version also works for non-RPM golang packages
@@ -279,6 +324,8 @@ mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
 install -p -m644 assets/release/release-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/blueprint
 install -p -m644 packaging/blueprint/blueprint*.toml %{buildroot}%{_datadir}/microshift/blueprint
+mkdir -p -m755 %{buildroot}%{_datadir}/microshift/kickstart
+install -p -m644 packaging/kickstart/kickstart*.ks.template %{buildroot}%{_datadir}/microshift/kickstart
 
 # spec validation files
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/spec
@@ -359,6 +406,47 @@ cat assets/optional/multus/kustomization.x86_64.yaml >> %{buildroot}/%{_prefix}/
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
 install -p -m644 assets/optional/multus/release-multus-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release/
 
+%if %{with_flannel}
+# kube-proxy
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy
+# Copy all the manifests except the arch specific ones
+install -p -m644 assets/optional/kube-proxy/0* %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy
+install -p -m644 assets/optional/kube-proxy/kustomization.yaml %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy
+
+%ifarch %{arm} aarch64
+cat assets/optional/kube-proxy/kustomization.aarch64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy/kustomization.yaml
+%endif
+
+%ifarch x86_64
+cat assets/optional/kube-proxy/kustomization.x86_64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy/kustomization.yaml
+%endif
+
+# kube-proxy-release-info
+mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
+install -p -m644 assets/optional/kube-proxy/release-kube-proxy-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release/
+
+# flannel
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel
+install -d -m755 %{buildroot}%{_sysconfdir}/systemd/system
+# Copy all the manifests except the arch specific ones
+install -p -m644 assets/optional/flannel/0* %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel
+install -p -m644 assets/optional/flannel/kustomization.yaml %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel
+install -p -m644 packaging/flannel/00-disableDefaultCNI.yaml %{buildroot}%{_sysconfdir}/microshift/config.d/00-disableDefaultCNI.yaml
+install -p -m644 packaging/flannel/microshift-flannel.service %{buildroot}%{_sysconfdir}/systemd/system/microshift.service
+
+%ifarch %{arm} aarch64
+cat assets/optional/flannel/kustomization.aarch64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel/kustomization.yaml
+%endif
+
+%ifarch x86_64
+cat assets/optional/flannel/kustomization.x86_64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel/kustomization.yaml
+%endif
+
+# flannel-release-info
+mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
+install -p -m644 assets/optional/flannel/release-flannel-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release/
+%endif
+
 # cleanup kubelet
 install -p -m644 packaging/tuned/microshift-cleanup-kubelet.service %{buildroot}%{_unitdir}/microshift-cleanup-kubelet.service
 
@@ -379,6 +467,23 @@ install -p -m644 packaging/tuned/runtime-class/kustomization.yaml %{buildroot}/%
 install -p -m644 packaging/tuned/microshift-tuned.service %{buildroot}%{_unitdir}/microshift-tuned.service
 install -p -m755 packaging/tuned/microshift-tuned.py %{buildroot}%{_bindir}/microshift-tuned
 
+# gateway-api
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api
+install -p -m644 assets/optional/gateway-api/0* %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api
+install -p -m644 assets/optional/gateway-api/kustomization.yaml %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api
+install -p -m755 packaging/greenboot/microshift-running-check-gateway-api.sh %{buildroot}%{_sysconfdir}/greenboot/check/required.d/41_microshift_running_check_gateway_api.sh
+
+%ifarch %{arm} aarch64
+cat assets/optional/gateway-api/kustomization.aarch64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api/kustomization.yaml
+%endif
+%ifarch x86_64
+cat assets/optional/gateway-api/kustomization.x86_64.yaml >> %{buildroot}/%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api/kustomization.yaml
+%endif
+
+# gateway-api-release-info
+mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
+install -p -m644 assets/optional/gateway-api/release-gateway-api-{x86_64,aarch64}.json %{buildroot}%{_datadir}/microshift/release/
+
 %pre networking
 
 getent group hugetlbfs >/dev/null || groupadd -r hugetlbfs
@@ -391,11 +496,11 @@ usermod -a -G hugetlbfs openvswitch
 
 %systemd_post microshift.service
 
-# only for install, not on upgrades
-if [ $1 -eq 1 ]; then
-	# if crio was already started, restart it so it will catch /etc/crio/crio.conf.d/10-microshift.conf
-	systemctl is-active --quiet crio && systemctl restart --quiet crio || true
-fi
+# Restart crio and microshift services if they are active, both on installs and upgrades
+# - Crio should pick up potential configuration updates
+# - MicroShift should refresh running containers, pick up potential manifest updates, etc.
+systemctl is-active --quiet crio       && systemctl restart --quiet crio       || true
+systemctl is-active --quiet microshift && systemctl restart --quiet microshift || true
 
 %pre selinux
 %selinux_relabel_pre -s %{selinuxtype}
@@ -465,9 +570,11 @@ fi
 %dir %{_datadir}/microshift
 %dir %{_datadir}/microshift/release
 %dir %{_datadir}/microshift/blueprint
+%dir %{_datadir}/microshift/kickstart
 
 %{_datadir}/microshift/release/release-{x86_64,aarch64}.json
 %{_datadir}/microshift/blueprint/blueprint*.toml
+%{_datadir}/microshift/kickstart/kickstart*.ks.template
 
 %files selinux
 /var/lib/kubelet/pods
@@ -510,6 +617,20 @@ fi
 %files multus-release-info
 %{_datadir}/microshift/release/release-multus-{x86_64,aarch64}.json
 
+%if %{with_flannel}
+%files flannel
+%dir %{_prefix}/lib/microshift/manifests.d/000-microshift-flannel
+%dir %{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy
+%{_prefix}/lib/microshift/manifests.d/000-microshift-flannel/*
+%{_prefix}/lib/microshift/manifests.d/000-microshift-kube-proxy/*
+%config(noreplace) %{_sysconfdir}/microshift/config.d/00-disableDefaultCNI.yaml
+%{_sysconfdir}/systemd/system/microshift.service
+
+%files flannel-release-info
+%{_datadir}/microshift/release/release-flannel-{x86_64,aarch64}.json
+%{_datadir}/microshift/release/release-kube-proxy-{x86_64,aarch64}.json
+%endif
+
 %files low-latency
 %{_prefix}/lib/tuned/microshift-baseline
 %config(noreplace) %{_sysconfdir}/tuned/microshift-baseline-variables.conf
@@ -518,10 +639,36 @@ fi
 %{_unitdir}/microshift-tuned.service
 %{_bindir}/microshift-tuned
 
+%files gateway-api
+%dir %{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api
+%{_prefix}/lib/microshift/manifests.d/000-microshift-gateway-api/*
+%{_sysconfdir}/greenboot/check/required.d/41_microshift_running_check_gateway_api.sh
+
+%files gateway-api-release-info
+%{_datadir}/microshift/release/release-gateway-api-{x86_64,aarch64}.json
+
 
 # Use Git command to generate the log and replace the VERSION string
 # LANG=C git log --date="format:%a %b %d %Y" --pretty="tformat:* %cd %an <%ae> VERSION%n- %s%n" packaging/rpm/microshift.spec
 %changelog
+* Mon Nov 11 2024 Gregory Giguashvili <ggiguash@redhat.com> 4.18.0
+- Restart crio and microshift services on RPM post-install
+
+* Sun Nov 10 2024 Gregory Giguashvili <ggiguash@redhat.com> 4.18.0
+- Add sample kickstart files to microshift-release-info RPM
+
+* Fri Oct 25 2024 Pablo Acevedo Montserrat <pacevedo@redhat.com> 4.18.0
+- USHIFT-4715: Add gateway-api-release-info rpm
+
+* Tue Oct 15 2024 Pablo Acevedo Montserrat <pacevedo@redhat.com> 4.18.0
+- USHIFT-4565: Add greenboot script
+
+* Tue Oct 15 2024 Pablo Acevedo Montserrat <pacevedo@redhat.com> 4.18.0
+- USHIFT-4565: Add microshift-gateway-api rpm
+
+* Mon Sep 16 2024 Praveen Kumar <prkumar@redhat.com> 4.18.0
+- Add microshift-flannel subpackage
+
 * Thu Sep 12 2024 Gregory Giguashvili <ggiguash@redhat.com> 4.17.0
 - Declare openvswitch3.3 package as obsolete to allow seemless upgrade to openvswitch3.4
 

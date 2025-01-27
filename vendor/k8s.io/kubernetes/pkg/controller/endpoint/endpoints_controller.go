@@ -76,8 +76,13 @@ func NewEndpointController(ctx context.Context, podInformer coreinformers.PodInf
 	recorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "endpoint-controller"})
 
 	e := &Controller{
-		client:           client,
-		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "endpoint"),
+		client: client,
+		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+			workqueue.TypedRateLimitingQueueConfig[string]{
+				Name: "endpoint",
+			},
+		),
 		workerLoopPeriod: time.Second,
 	}
 
@@ -149,7 +154,7 @@ type Controller struct {
 	// more often than services with few pods; it also would cause a
 	// service that's inserted multiple times to be processed more than
 	// necessary.
-	queue workqueue.RateLimitingInterface
+	queue workqueue.TypedRateLimitingInterface[string]
 
 	// workerLoopPeriod is the time between worker runs. The workers process the queue of service and pod changes.
 	workerLoopPeriod time.Duration
@@ -327,19 +332,19 @@ func (e *Controller) processNextWorkItem(ctx context.Context) bool {
 	defer e.queue.Done(eKey)
 
 	logger := klog.FromContext(ctx)
-	err := e.syncService(ctx, eKey.(string))
+	err := e.syncService(ctx, eKey)
 	e.handleErr(logger, err, eKey)
 
 	return true
 }
 
-func (e *Controller) handleErr(logger klog.Logger, err error, key interface{}) {
+func (e *Controller) handleErr(logger klog.Logger, err error, key string) {
 	if err == nil {
 		e.queue.Forget(key)
 		return
 	}
 
-	ns, name, keyErr := cache.SplitMetaNamespaceKey(key.(string))
+	ns, name, keyErr := cache.SplitMetaNamespaceKey(key)
 	if keyErr != nil {
 		logger.Error(err, "Failed to split meta namespace cache key", "key", key)
 	}
@@ -527,12 +532,13 @@ func (e *Controller) syncService(ctx context.Context, key string) error {
 	}
 
 	logger.V(4).Info("Update endpoints", "service", klog.KObj(service), "readyEndpoints", totalReadyEps, "notreadyEndpoints", totalNotReadyEps)
+	var updatedEndpoints *v1.Endpoints
 	if createEndpoints {
 		// No previous endpoints, create them
 		_, err = e.client.CoreV1().Endpoints(service.Namespace).Create(ctx, newEndpoints, metav1.CreateOptions{})
 	} else {
 		// Pre-existing
-		_, err = e.client.CoreV1().Endpoints(service.Namespace).Update(ctx, newEndpoints, metav1.UpdateOptions{})
+		updatedEndpoints, err = e.client.CoreV1().Endpoints(service.Namespace).Update(ctx, newEndpoints, metav1.UpdateOptions{})
 	}
 	if err != nil {
 		if createEndpoints && errors.IsForbidden(err) {
@@ -559,7 +565,10 @@ func (e *Controller) syncService(ctx context.Context, key string) error {
 	// If the current endpoints is updated we track the old resource version, so
 	// if we obtain this resource version again from the lister we know is outdated
 	// and we need to retry later to wait for the informer cache to be up-to-date.
-	if !createEndpoints {
+	// there are some operations (webhooks, truncated endpoints, ...) that can potentially cause endpoints updates became noop
+	// and return the same resourceVersion.
+	// Ref: https://issues.k8s.io/127370 , https://issues.k8s.io/126578
+	if updatedEndpoints != nil && updatedEndpoints.ResourceVersion != currentEndpoints.ResourceVersion {
 		e.staleEndpointsTracker.Stale(currentEndpoints)
 	}
 	return nil

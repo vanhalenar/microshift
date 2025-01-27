@@ -21,6 +21,10 @@ apiServer:
             - ""
     subjectAltNames:
         - ""
+    tls:
+        cipherSuites:
+            - ""
+        minVersion: ""
 debugging:
     logLevel: ""
 dns:
@@ -28,14 +32,33 @@ dns:
 etcd:
     memoryLimitMB: 0
 ingress:
+    defaultHTTPVersion: 0
+    forwardedHeaderPolicy: ""
+    httpCompression:
+        mimeTypes:
+            - ""
+    httpEmptyRequestsPolicy: ""
     listenAddress:
         - ""
+    logEmptyRequests: ""
     ports:
         http: 0
         https: 0
     routeAdmissionPolicy:
         namespaceOwnership: ""
     status: ""
+    tuningOptions:
+        clientFinTimeout: ""
+        clientTimeout: ""
+        headerBufferBytes: 0
+        headerBufferMaxRewriteBytes: 0
+        healthCheckInterval: ""
+        maxConnections: 0
+        serverFinTimeout: ""
+        serverTimeout: ""
+        threadCount: 0
+        tlsInspectDelay: ""
+        tunnelTimeout: ""
 kubelet:
 manifests:
     kustomizePaths:
@@ -43,6 +66,7 @@ manifests:
 network:
     clusterNetwork:
         - ""
+    cniPlugin: ""
     serviceNetwork:
         - ""
     serviceNodePortRange: ""
@@ -82,6 +106,10 @@ apiServer:
             - ""
     subjectAltNames:
         - ""
+    tls:
+        cipherSuites:
+            - ""
+        minVersion: VersionTLS12
 debugging:
     logLevel: Normal
 dns:
@@ -89,14 +117,33 @@ dns:
 etcd:
     memoryLimitMB: 0
 ingress:
+    defaultHTTPVersion: 1
+    forwardedHeaderPolicy: ""
+    httpCompression:
+        mimeTypes:
+            - ""
+    httpEmptyRequestsPolicy: Respond
     listenAddress:
         - ""
+    logEmptyRequests: Log
     ports:
         http: 80
         https: 443
     routeAdmissionPolicy:
         namespaceOwnership: InterNamespaceAllowed
     status: Managed
+    tuningOptions:
+        clientFinTimeout: ""
+        clientTimeout: ""
+        headerBufferBytes: 0
+        headerBufferMaxRewriteBytes: 0
+        healthCheckInterval: ""
+        maxConnections: 0
+        serverFinTimeout: ""
+        serverTimeout: ""
+        threadCount: 0
+        tlsInspectDelay: ""
+        tunnelTimeout: ""
 kubelet:
 manifests:
     kustomizePaths:
@@ -107,6 +154,7 @@ manifests:
 network:
     clusterNetwork:
         - 10.42.0.0/16
+    cniPlugin: ""
     serviceNetwork:
         - 10.43.0.0/16
     serviceNodePortRange: 30000-32767
@@ -166,7 +214,7 @@ Setting the `memoryLimitMB` to a value greater than 0 will result in a soft memo
 
 Please note that values close to the floor may be more likely to impact etcd performance - the memory limit is a trade-off of memory footprint and etcd performance. The lower the limit, the more time etcd will spend on paging memory to disk and will take longer to respond to queries or even timing requests out if the limit is low and the etcd usage is high.
 
-# Auto-applying Manifests
+## Auto-applying Manifests
 
 MicroShift leverages `kustomize` for Kubernetes-native templating and declarative management of resource objects. Upon start-up, it searches `/etc/microshift/manifests`, `/etc/microshift/manifests.d/*`, `/usr/lib/microshift/manifests`, and `/usr/lib/microshift/manifests.d/*` directories for a `kustomization.yaml`, `kustomization.yml`, or `Kustomization` file. If it finds one, it automatically runs `kubectl apply -k` command to apply that manifest.
 
@@ -204,7 +252,7 @@ manifests:
 ```
 
 
-## Manifest Example
+### Manifest Example
 
 The example demonstrates automatic deployment of a `busybox` container using `kustomize` manifests in the `/etc/microshift/manifests` directory.
 
@@ -262,6 +310,42 @@ sudo systemctl restart microshift
 oc get pods -n busybox
 ```
 
+### Deleting Manifests
+
+MicroShift supports resource manifest deletion for data removal or upgrade scenarios.
+Upgrade scenarios include situations where some objects should be removed, but not all of them to keep the data.
+
+MicroShift scans `delete` subdirectories of configured manifests directory.
+Given the default configuration, MicroShift will run `kubectl delete -k --ignore-not-found=true .` for any kustomization file found in following paths:
+- `/etc/microshift/manifests/delete`
+- `/etc/microshift/manifests.d/delete/*`
+- `/usr/lib/microshift/manifests/delete`
+- `/usr/lib/microshift/manifests.d/delete/*`
+
+For delete scenarios, just move the existing manifest to one of the `delete` directories.
+
+For resource removal in upgrade scenarios, is not necessary to include `spec`. Specify `group/version`, `kind`, `name`, and `namespace` of an object.
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - all_resources.yaml
+
+# all_resources.yaml
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: multus
+  namespace: openshift-multus
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dhcp-daemon
+  namespace: openshift-multus
+```
+
 ## Storage Configuration
 
 MicroShift's included CSI plugin manages LVM LogicalVolumes to provide persistent workload storage. For LVMS
@@ -283,9 +367,9 @@ specifying supported values under `.storage` node of the MicroShift config in th
 storage
   optionalCsiComponents: **ARRAY**.
 ```
-  - Expected values are: `['csi-snapshot-controller', 'csi-snapshot-webhook', 'none']`. `'none'` is mutually exclusive
+  - Expected values are: `['csi-snapshot-controller', 'none']`. `'none'` is mutually exclusive
   with all other values.
-  - Empty array defaults to deploying `snapshot-controller` and `snapshot-webhook`.
+  - Empty array defaults to deploying `snapshot-controller`.
 
 ### Automated Uninstallation is Not Supported
 

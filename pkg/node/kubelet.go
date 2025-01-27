@@ -147,6 +147,8 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		"volumePluginDir":    config.DataDir + "/kubelet-plugins/volume/exec",
 		"clusterDNSIP":       cfg.Network.DNS,
 		"resolvConf":         resolvConf,
+		"tlsCipherSuites":    strings.Join(cfg.ApiServer.TLS.CipherSuites, ","),
+		"tlsMinVersion":      cfg.ApiServer.TLS.MinVersion,
 		"userProvidedConfig": userProvidedConfig,
 	}
 
@@ -192,11 +194,22 @@ func (s *KubeletServer) Run(ctx context.Context, ready chan<- struct{}, stopped 
 		close(ready)
 	}()
 
+	panicChannel := make(chan any, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicChannel <- r
+			}
+		}()
 		errc <- kubelet.Run(ctx, kubeletServer, kubeletDeps, utilfeature.DefaultFeatureGate)
 	}()
 
-	return <-errc
+	select {
+	case err := <-errc:
+		return err
+	case perr := <-panicChannel:
+		panic(perr)
+	}
 }
 
 func loadConfigFile(name string) (*kubeletconfig.KubeletConfiguration, error) {

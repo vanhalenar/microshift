@@ -1,10 +1,8 @@
 package data
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,13 +13,6 @@ import (
 )
 
 var (
-	cpArgs = []string{
-		"--verbose",
-		"--recursive",
-		"--preserve",
-		"--reflink=auto",
-	}
-
 	expectedBackupContent = sets.New[string](
 		// .nodename omitted
 		"certs",
@@ -88,7 +79,7 @@ func (dm *manager) GetBackupList() ([]BackupName, error) {
 	return backups, nil
 }
 
-func (dm *manager) Backup(name BackupName) error {
+func (dm *manager) Backup(name BackupName) (string, error) {
 	klog.InfoS("Copying data to backup directory",
 		"storage", dm.storage,
 		"name", name,
@@ -96,35 +87,39 @@ func (dm *manager) Backup(name BackupName) error {
 	)
 
 	if name == "" {
-		return &EmptyArgErr{"name"}
+		return "", &EmptyArgErr{"name"}
 	}
 
 	if exists, err := dm.BackupExists(name); err != nil {
-		return fmt.Errorf("failed to determine if backup %q exists: %w", name, err)
+		return "", fmt.Errorf("failed to determine if backup %q exists: %w", name, err)
 	} else if exists {
-		return fmt.Errorf("failed to create backup destination %q because it already exists",
+		return "", fmt.Errorf("failed to create backup destination %q because it already exists",
 			name)
 	}
 
 	if found, err := pathExists(string(dm.storage)); err != nil {
-		return fmt.Errorf("failed to determine if storage location %q for backup exists: %w",
+		return "", fmt.Errorf("failed to determine if storage location %q for backup exists: %w",
 			dm.storage, err)
 	} else if !found {
 		if makeDirErr := util.MakeDir(string(dm.storage)); makeDirErr != nil {
-			return fmt.Errorf("failed to create backup storage directory %q: %w",
+			return "", fmt.Errorf("failed to create backup storage directory %q: %w",
 				dm.storage, makeDirErr)
 		}
 		klog.InfoS("Created backup storage directory", "path", dm.storage)
 	}
 
+	if err := CheckIfEnoughSpaceToBackUp(string(dm.storage)); err != nil {
+		return "", err
+	}
+
 	dest := dm.GetBackupPath(name)
 	if err := copyPath(config.DataDir, dest); err != nil {
-		return err
+		return "", err
 	}
 
 	klog.InfoS("Copied data to backup directory",
 		"backup", dest, "data", config.DataDir)
-	return nil
+	return dest, nil
 }
 
 func (dm *manager) Restore(name BackupName) error {
@@ -148,6 +143,10 @@ func (dm *manager) Restore(name BackupName) error {
 
 	if err := dm.isMicroShiftBackup(path); err != nil {
 		return fmt.Errorf("%q is not a valid MicroShift backup: %w", path, err)
+	}
+
+	if err := CheckIfEnoughSpaceToRestore(path); err != nil {
+		return err
 	}
 
 	tmp := fmt.Sprintf("%s.saved", config.DataDir)
@@ -223,22 +222,14 @@ func checkDirectoryContents(existing sets.Set[string]) error {
 }
 
 func copyPath(src, dest string) error {
-	cmd := exec.Command("cp", append(cpArgs, src, dest)...) //nolint:gosec
-	klog.InfoS("Starting copy", "cmd", cmd)
-
-	var outb, errb bytes.Buffer
-	cmd.Stdout = &outb
-	cmd.Stderr = &errb
-	err := cmd.Run()
-
-	if err != nil {
-		klog.InfoS("Failed to copy", "cmd", cmd,
-			"stdout", strings.ReplaceAll(outb.String(), "\n", `, `),
-			"stderr", errb.String())
-		return fmt.Errorf("failed to copy %q to %q: %w", src, dest, err)
+	copier := AtomicDirCopy{Source: src, Destination: dest}
+	if err := copier.CopyToIntermediate(); err != nil {
+		return err
+	}
+	if err := copier.RenameToFinal(); err != nil {
+		return err
 	}
 
-	klog.InfoS("Finished copy", "cmd", cmd)
 	return nil
 }
 

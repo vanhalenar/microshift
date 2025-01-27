@@ -50,10 +50,10 @@ _install() {
 }
 
 gettool_golangci-lint() {
-    local ver="1.55.2"
+    local ver="1.62.2"
     declare -A checksums=(
-        ["x86_64"]="ca21c961a33be3bc15e4292dc40c98c8dcc5463a7b6768a3afc123761630c09c"
-        ["aarch64"]="8eb0cee9b1dbf0eaa49871798c7f8a5b35f2960c52d776a5f31eb7d886b92746")
+        ["x86_64"]="5101292b7925a6a14b49c5c3d845c5021399698ffd2f41bcfab8a111b5669939"
+        ["aarch64"]="10b6f5bd8483bd9e85a82f6119ed08f95609f42b86dc344b5dc15703c74d5b85")
 
     declare -A arch_map=(
         ["x86_64"]="amd64"
@@ -105,10 +105,10 @@ gettool_kuttl() {
 }
 
 gettool_yq() {
-    local ver="4.26.1"
+    local ver="4.44.2"
     declare -A checksums=(
-        ["x86_64"]="4d3afe5ddf170ac7e70f4c23eea2969eca357947b56d5d96b8516bdf9ce56577"
-        ["aarch64"]="837a659c5a04599f3ee7300b85bf6ccabdfd7ce39f5222de27281e0ea5bcc477")
+        ["x86_64"]="e4c2570249e3993e33ffa44e592b5eee8545bd807bfbeb596c2986d86cb6c85c"
+        ["aarch64"]="79c22d98b2ff517cb8b1c20499350cbc1e8c753483c8f72a37a299e6e9872a98")
 
     declare -A arch_map=(
         ["x86_64"]="amd64"
@@ -120,36 +120,6 @@ gettool_yq() {
     local url="https://github.com/mikefarah/yq/releases/download/v${ver}/yq_linux_${arch}.tar.gz"
 
     _install "${url}" "${checksum}" "${filename}" "yq_linux_${arch}"
-}
-
-gettool_hadolint() {
-    local ver="2.12.0"
-    declare -A checksums=(
-        ["x86_64"]="56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010"
-        ["aarch64"]="5798551bf19f33951881f15eb238f90aef023f11e7ec7e9f4c37961cb87c5df6")
-
-    declare -A arch_map=(
-        ["x86_64"]="x86_64"
-        ["aarch64"]="arm64")
-
-    local arch="${arch_map[${ARCH}]}"
-    local checksum="${checksums[${ARCH}]}"
-    local filename="hadolint"
-    local url="https://github.com/hadolint/hadolint/releases/download/v${ver}/hadolint-Linux-${arch}"
-
-    _install "${url}" "${checksum}" "${filename}" "hadolint-Linux-${arch}"
-
-    # SELinux context change is required on some systems to prevent the following error
-    #
-    # SELinux is preventing <exename> from execmod access on the file.
-    # If you want to allow all unconfined executables to use libraries requiring text relocation
-    # that are not labeled textrel_shlib_t, then you must tell SELinux about this by enabling the
-    # 'selinuxuser_execmod' boolean.
-    if which selinuxenabled >/dev/null 2>&1; then
-        if selinuxenabled ; then
-            chcon -t textrel_shlib_t "${DEST_DIR}/${filename}"
-        fi
-    fi
 }
 
 gettool_lichen() {

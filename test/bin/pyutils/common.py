@@ -7,12 +7,27 @@ import sys
 import subprocess
 import time
 import threading
+import base64
+import json
 from typing import List
 
 
 PUSHD_DIR_STACK = []
 JUNIT_LOGFILE = None
 JUNIT_LOCK = threading.Lock()
+
+
+class MeasureRunTimeInScope:
+    def __init__(self, msg, file=sys.stderr):
+        self.start_time = time.time()
+        self.msg = msg
+        self.file = file
+        print_msg(msg, file)
+
+    def __del__(self):
+        dtime = time.time() - self.start_time
+        stime = time.strftime("%H:%M:%S", time.gmtime(dtime))
+        print_msg(f"{self.msg} (ELAPSED={stime})", self.file)
 
 
 def start_junit(groupdir):
@@ -29,7 +44,7 @@ def start_junit(groupdir):
     delete_file(JUNIT_LOGFILE)
     timestamp = get_timestamp("%Y-%m-%dT%H:%M:%S")
     append_file(JUNIT_LOGFILE, f'''<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="microshift-test-framework:{group}" timestamp="{timestamp}">''')
+<testsuite name="microshift-test-framework:{group}" timestamp="{timestamp}">\n''')
 
 
 def close_junit():
@@ -38,31 +53,39 @@ def close_junit():
     if not JUNIT_LOGFILE:
         raise Exception("Attempt to close junit without starting it first")
     # Close the unit
-    append_file(JUNIT_LOGFILE, '</testsuite>')
+    append_file(JUNIT_LOGFILE, '</testsuite>\n')
     # Reset the junit log directory
     JUNIT_LOGFILE = None
 
 
-def record_junit(object, step, status):
+def record_junit(object, step, status, start=0.0, log_filepath=''):
     """Add a message for the specified object and step with OK, SKIP or FAIL status.
     Recording messages is synchronized and it can be called from different threads.
     """
+    t = ''
+    if start != 0.0:
+        duration = time.time() - start
+        t = f' time="{duration}"'
+
     try:
         # BEGIN CRITICAL SECTION
         JUNIT_LOCK.acquire()
 
-        append_file(JUNIT_LOGFILE, f'<testcase classname="{object}" name="{step}">')
+        append_file(JUNIT_LOGFILE, f'<testcase classname="{object}" name="{step}"{t}>\n')
         # Add a message according to the status
         if status == "OK":
             pass
         elif status.startswith("SKIP"):
-            append_file(JUNIT_LOGFILE, f'<skipped message="{status}" type="{step}-skipped" />')
+            append_file(JUNIT_LOGFILE, f'<skipped message="{status}" type="{step}-skipped" />\n')
         elif status.startswith("FAIL"):
-            append_file(JUNIT_LOGFILE, f'<failure message="{status}" type="${step}-failure" />')
+            desc = ''
+            if log_filepath:
+                desc = f"\n{escape_xml(get_last_n_lines(log_filepath, 15))}\n"
+            append_file(JUNIT_LOGFILE, f'<failure message="{status}" type="${step}-failure">{desc}</failure>\n')
         else:
             raise Exception(f"Invalid junit status '{status}'")
         # Close the test case block
-        append_file(JUNIT_LOGFILE, '</testcase>')
+        append_file(JUNIT_LOGFILE, '</testcase>\n')
     except Exception:
         # Propagate the exception to the caller
         raise
@@ -106,7 +129,7 @@ def run_command(command: List[str], dry_run: bool):
         print_msg(f"[DRY RUN] {' '.join(command)}")
         return None
 
-    print_msg(f"[RUN] {' '.join(command)}")
+    _ = MeasureRunTimeInScope(f"[RUN] {' '.join(command)}")
     return subprocess.run(command, check=True)
 
 
@@ -121,7 +144,7 @@ def run_command_in_shell(command: List[str], dry_run: bool = False,
         print_msg(f"[DRY RUN] {command}")
         return ""
 
-    print_msg(f"[SHELL] {command}")
+    _ = MeasureRunTimeInScope(f"[SHELL] {command}")
     # Run the command and return its output
     result = subprocess.run(
         command,
@@ -172,6 +195,19 @@ def delete_file(file_path: str):
         os.remove(file_path)
     except FileNotFoundError:
         pass
+
+
+def file_has_valid_lines(file_path: str) -> bool:
+    """Check if a text file contains at least one non-empty, non-commented line"""
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                sline = line.strip()
+                if sline and not sline.startswith('#'):
+                    return True
+        return False
+    except FileNotFoundError:
+        return False
 
 
 def basename(path: str):
@@ -231,3 +267,48 @@ def retry_on_exception(max_attempts, func, *args, **kwargs):
                 print_msg(f"Error: Reached maximum of {max_attempts} attempts, fatal error")
                 # Propagate the exception to the caller
                 raise
+
+
+def get_last_n_lines(filename: str, lines: int):
+    """Get last N lines from a file"""
+    with open(filename, 'rb') as f:
+        # Go to the end of the file to get its length.
+        len = f.seek(0, 2)
+        # Iterate from end of the file to the beginning of the file
+        # char by char counting newlines.
+        for i in range(len, 0, -1):
+            f.seek(i)
+            if f.read(1) == b'\n':
+                lines -= 1
+            if lines < 0:
+                break
+        return f.read().decode(encoding='utf-8').strip()
+
+
+def escape_xml(input: str):
+    """Escape xml by replacing &<>\' chars with their character references"""
+    return input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
+
+
+def update_pull_secret(ifname: str, ofname: str, registry: str):
+    """Create a new pull secret file containing authentication information for
+    both remote and local registries
+    """
+    # Base64-encode the password
+    encoded_pass = base64.b64encode("microshift:microshift".encode()).decode()
+    # Local registry authentication entry
+    new_secret = {
+        registry: {
+            "auth": encoded_pass
+        }
+    }
+    # Read the input data
+    with open(ifname, "r") as ifile:
+        json_data = json.load(ifile)
+    # Append the new auth entry
+    json_data["auths"].update(new_secret)
+    # Write the updated file
+    with open(ofname, "w") as ofile:
+        json.dump(json_data, ofile, indent=2)
+    # Update the output file permissions
+    os.chmod(ofname, 0o600)

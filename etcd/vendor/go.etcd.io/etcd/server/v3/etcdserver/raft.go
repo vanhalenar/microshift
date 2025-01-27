@@ -33,6 +33,8 @@ import (
 	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
+	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/revbump"
 	"go.etcd.io/etcd/server/v3/wal"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
 	"go.uber.org/zap"
@@ -83,7 +85,9 @@ type apply struct {
 type raftNode struct {
 	lg *zap.Logger
 
-	tickMu *sync.Mutex
+	tickMu *sync.RWMutex
+	// timestamp of the latest tick
+	latestTickTs time.Time
 	raftNodeConfig
 
 	// a chan to send/receive snapshot
@@ -135,8 +139,9 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 	raft.SetLogger(lg)
 	r := &raftNode{
 		lg:             cfg.lg,
-		tickMu:         new(sync.Mutex),
+		tickMu:         new(sync.RWMutex),
 		raftNodeConfig: cfg,
+		latestTickTs:   time.Now(),
 		// set up contention detectors for raft heartbeat message.
 		// expect to send a heartbeat within 2 heartbeat intervals.
 		td:         contention.NewTimeoutDetector(2 * cfg.heartbeat),
@@ -158,7 +163,14 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 func (r *raftNode) tick() {
 	r.tickMu.Lock()
 	r.Tick()
+	r.latestTickTs = time.Now()
 	r.tickMu.Unlock()
+}
+
+func (r *raftNode) getLatestTickTs() time.Time {
+	r.tickMu.RLock()
+	defer r.tickMu.RUnlock()
+	return r.latestTickTs
 }
 
 // start prepares and starts raftNode in a new goroutine. It is no longer safe
@@ -560,7 +572,8 @@ func restartNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot) (types.ID, 
 	return id, cl, n, s, w
 }
 
-func restartAsStandaloneNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
+func restartAsStandaloneNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot, be backend.Backend) (types.ID,
+	*membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
 	var walsnap walpb.Snapshot
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
@@ -598,6 +611,13 @@ func restartAsStandaloneNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot)
 	}
 	if len(ents) != 0 {
 		st.Commit = ents[len(ents)-1].Index
+	}
+
+	if cfg.ForceNewClusterBumpAmount > 0 {
+		err = revbump.UnsafeModifyLastRevision(cfg.Logger, cfg.ForceNewClusterBumpAmount, be)
+		if err != nil {
+			cfg.Logger.Fatal("failed to modify last revision", zap.Error(err))
+		}
 	}
 
 	cfg.Logger.Info(

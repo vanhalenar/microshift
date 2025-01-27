@@ -1,3 +1,4 @@
+%include /pre-host-resolution.cfg
 %include /main-prologue.cfg
 %include /main-network.cfg
 %include /main-ostreecontainer.cfg
@@ -5,10 +6,14 @@
 %post --log=/dev/console --erroronfail
 
 %include /post-microshift.cfg
+
 %include /post-containers.cfg
+if REPLACE_IMAGE_SIGSTORE_ENABLED ; then
+%include /post-containers-sigstore.cfg
+fi
+
 %include /post-system.cfg
 %include /post-network.cfg
-%include /post-bootc-wa.cfg
 
 %end
 

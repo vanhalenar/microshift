@@ -3,7 +3,18 @@
 - building the container with podman multistage build :
   ```bash
   git clone https://github.com/openshift/microshift.git ~/microshift
+  ```
+  To use OVN-K as CNI
+  ```bash
   cd ~/microshift && sudo podman build -f okd/src/microshift-okd-multi-build.Containerfile . -t microshift-okd
+  ```
+  To use flannel as CNI
+  ```bash
+  cd ~/microshift && sudo podman build --env WITH_FLANNEL=1 -f okd/src/microshift-okd-multi-build.Containerfile . -t microshift-okd
+  ```
+  To embed all component images
+  ```bash
+  cd ~/microshift && sudo podman build --env EMBED_CONTAINER_IMAGES=1 -f okd/src/microshift-okd-multi-build.Containerfile . -t microshift-okd
   ```
   - build runnable container based on current source:
     1. replace microshift assets images to OKD  upstream images
@@ -31,7 +42,6 @@
     > oc get pods
     NAMESPACE                  NAME                                       READY   STATUS    RESTARTS        AGE
     kube-system                csi-snapshot-controller-7d6c78bc58-5p7tb   1/1     Running   0               8m52s
-    kube-system                csi-snapshot-webhook-5598db6db4-rmrpx      1/1     Running   0               8m54s
     openshift-dns              dns-default-2q89q                          2/2     Running   0               7m34s
     openshift-dns              node-resolver-k2c5h                        1/1     Running   0               8m54s
     openshift-ingress          router-default-db4b598b9-x8lvb             1/1     Running   0               8m52s

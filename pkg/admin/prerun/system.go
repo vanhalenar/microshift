@@ -41,7 +41,7 @@ func getDeploymentsFromOSTree() ([]deployment, error) {
 	outputToLog := stdout.String()
 	outputToLog = strings.ReplaceAll(outputToLog, "\n", "")
 	outputToLog = strings.ReplaceAll(outputToLog, " ", "")
-	klog.InfoS("rpm-ostree status", "output", outputToLog)
+	klog.V(2).InfoS("rpm-ostree status", "output", outputToLog)
 
 	status := struct {
 		Deployments []deployment `json:"deployments"`
@@ -60,7 +60,7 @@ func getDeploymentsFromOSTree() ([]deployment, error) {
 	return status.Deployments, nil
 }
 
-func getCurrentDeploymentID() (string, error) {
+func GetCurrentDeploymentID() (string, error) {
 	deployments, err := getDeploymentsFromOSTree()
 	if err != nil {
 		return "", fmt.Errorf("failed to get deployments: %w", err)
