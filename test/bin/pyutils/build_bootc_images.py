@@ -27,6 +27,7 @@ CONTAINER_LIST = common.get_env_var('CONTAINER_LIST')
 LOCAL_REPO = common.get_env_var('LOCAL_REPO')
 BASE_REPO = common.get_env_var('BASE_REPO')
 NEXT_REPO = common.get_env_var('NEXT_REPO')
+BREW_REPO = common.get_env_var('BREW_REPO')
 HOME_DIR = common.get_env_var("HOME")
 PULL_SECRET = common.get_env_var('PULL_SECRET', f"{HOME_DIR}/.pull-secret.json")
 # Switch to quay.io/centos-bootc/bootc-image-builder:latest if any new upstream
@@ -124,6 +125,15 @@ def set_rpm_version_info_vars():
     SOURCE_VERSION = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm}")
     SOURCE_VERSION_BASE = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm_base}")
 
+    # The brew versions are deduced from the locally downloaded RPMs.
+    # If RPMs are missing, the version is empty and builds are skipped.
+    global BREW_VERSION
+    try:
+        release_info_rpm_brew = find_latest_rpm(BREW_REPO)
+        BREW_VERSION = common.run_command_in_shell(f"rpm -q --queryformat '%{{version}}-%{{release}}' {release_info_rpm_brew}")
+    except Exception:
+        BREW_VERSION = ""
+
     # The source images are used in selected container image builds
     global SOURCE_IMAGES
 
@@ -145,7 +155,7 @@ def set_rpm_version_info_vars():
     # Update selected environment variables based on the global variables.
     # These are used for templating container files and images.
     rpmver_globals_vars = [
-        'SOURCE_VERSION', 'SOURCE_VERSION_BASE', 'SOURCE_IMAGES',
+        'SOURCE_VERSION', 'SOURCE_VERSION_BASE', 'BREW_VERSION', 'SOURCE_IMAGES',
         'SSL_CLIENT_KEY_FILE', 'SSL_CLIENT_CERT_FILE'
     ]
     for var in rpmver_globals_vars:
@@ -558,7 +568,7 @@ def main():
 
         # Determine versions of RPM packages
         set_rpm_version_info_vars()
-        # Prepare container image lists for mirroring registries
+        # Prepare container images list for mirroring registries
         common.delete_file(CONTAINER_LIST)
         if args.no_extract_images:
             common.print_msg("Skipping container image extraction")
@@ -568,6 +578,9 @@ def main():
             extract_container_images(f"4.{FAKE_NEXT_MINOR_VERSION}.*", NEXT_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(PREVIOUS_RELEASE_VERSION, PREVIOUS_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
             extract_container_images(YMINUS2_RELEASE_VERSION, YMINUS2_RELEASE_REPO, CONTAINER_LIST, args.dry_run)
+        # Sort the images list, only leaving unique entries
+        common.sort_uniq_file(CONTAINER_LIST)
+
         # Process package source templates
         ipkgdir = f"{SCRIPTDIR}/../package-sources-bootc"
         for ifile in os.listdir(ipkgdir):

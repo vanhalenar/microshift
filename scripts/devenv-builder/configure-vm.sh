@@ -28,6 +28,7 @@ function usage() {
     echo "  --skip-dnf-update         Do NOT run dnf update"
     echo "  --pull-images             Force pulling of container images before starting MicroShift"
     echo "  --optional-rpms           Install optional RPMs (OLM, Multus) along with core MicroShift RPMs"
+    echo "  --skip-optional-rpms      Comma separated list of optional RPMs to skip."
 
     [ -n "$1" ] && echo -e "\nERROR: $1"
     exit 1
@@ -64,6 +65,10 @@ while [ $# -gt 1 ]; do
         OPTIONAL_RPMS=true
         shift
         ;;
+    --skip-optional-rpms)
+        OPTIONAL_SKIPPED_RPMS=$2
+        shift 2
+        ;;        
     *) usage ;;
     esac
 done
@@ -163,7 +168,7 @@ if ${INSTALL_BUILD_DEPS} || ${BUILD_AND_RUN}; then
     [[ -d /run/systemd/system ]] &&  sudo systemctl enable --now cockpit.socket
 fi
 
-GO_VER=1.23.2
+GO_VER=1.23.6
 GO_ARCH=$([ "$(uname -m)" == "x86_64" ] && echo "amd64" || echo "arm64")
 GO_INSTALL_DIR="/usr/local/go${GO_VER}"
 if ${INSTALL_BUILD_DEPS} && [ ! -d "${GO_INSTALL_DIR}" ]; then
@@ -258,7 +263,15 @@ if ${BUILD_AND_RUN}; then
         # Skip gateway api rpms because:
         # - Feature is still dev preview and no tests/docs are guaranteed.
         # - There is one issue with conformance (see USHIFT-4757) that needs to be addressed in the operator.
-        "${DNF_RETRY}" "localinstall" "$(find ~/microshift/_output/rpmbuild/RPMS -type f -name "*.rpm" -not -name "*gateway-api*")"
+
+        if [ -n "${OPTIONAL_SKIPPED_RPMS}" ] ; then
+            SKIPPED_RPMS="gateway-api ${OPTIONAL_SKIPPED_RPMS//,/ }"
+        else
+            SKIPPED_RPMS="gateway-api"
+        fi
+        
+        # shellcheck disable=SC2046,SC2086
+        "${DNF_RETRY}" "localinstall" "$(find ~/microshift/_output/rpmbuild/RPMS -type f -name "*.rpm" $(printf ' -not -name *%s* ' ${SKIPPED_RPMS}))" 
     else
         createrepo "${HOME}/microshift/_output/rpmbuild"
         "${DNF_RETRY}" "install" \

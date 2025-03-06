@@ -22,6 +22,7 @@ import (
 	tcpnet "net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,14 @@ import (
 )
 
 var previousGatewayIP string = ""
+
+type routeStruct struct {
+	// Name of interface
+	Iface string
+
+	// big-endian hex string
+	Gateway string
+}
 
 // Remember whether we have successfully found the hard-coded nodeIP
 // on this host.
@@ -164,7 +173,23 @@ func selectIPFromHostInterface(nodeIP string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
+	// Sort all interfaces by index. Interfaces are listed in the same ordering as
+	// in /proc/net/dev. The ordering is not based in interface index, and it is
+	// not guaranteed to list system interfaces first. Veth interfaces from containers
+	// could get listed first and retrieve the wrong node IP.
+	// The index is assigned sequentially depending on the order of kmods loading
+	// and interface creation. Since the interfaces we are looking for belong to
+	// NetworkManager and the ones that could get a wrong node IP depend on a systemd
+	// unit that requires system networking to be ready, we can assume the lower
+	// indices are safe to use.
+	slices.SortFunc(ifaces, func(a, b tcpnet.Interface) int {
+		if a.Index > b.Index {
+			return 1
+		} else if a.Index < b.Index {
+			return -1
+		}
+		return 0
+	})
 	// get list of interfaces
 	for _, i := range ifaces {
 		if i.Name == "br-ex" {
@@ -265,4 +290,75 @@ func GetHostIPv6(ipHint string) (string, error) {
 	}
 
 	return "", fmt.Errorf("unable to find host IPv6 address")
+}
+
+func FindDefaultRouteMinMTU() (mtu int, err error) {
+	ipFamilies := []int{netlink.FAMILY_V4, netlink.FAMILY_V6}
+
+	mtu_slice := []int{}
+
+	for _, ipFamily := range ipFamilies {
+		new_mtu, err := FindDefaultRouteMTU(ipFamily)
+		if err != nil {
+			continue
+		}
+		mtu_slice = append(mtu_slice, new_mtu)
+	}
+	if len(mtu_slice) > 0 {
+		return slices.Min(mtu_slice), nil
+	}
+	return 0, fmt.Errorf("could not find minimal MTU")
+}
+
+func FindDefaultRouteMTU(ipFamily int) (mtu int, err error) {
+	link, err := FindDefaultRouteIface(ipFamily)
+	if err != nil || link.MTU == 0 {
+		return 0, err
+	}
+
+	klog.Infof("using IP %d on Interface %s with MTU %d ", ipFamily, link.Name, link.MTU)
+
+	return link.MTU, nil
+}
+
+// Find the Default route Interface based on ipv4 or ipv6 routes.
+func FindDefaultRouteIface(ipFamily int) (iface *tcpnet.Interface, err error) {
+	parsedStruct, err := findDefaultRouteForFamily(ipFamily)
+	if err != nil {
+		return nil, err
+	}
+
+	iface, err = tcpnet.InterfaceByName(parsedStruct.Iface)
+	if err != nil {
+		return nil, err
+	}
+
+	return iface, nil
+}
+
+func findDefaultRouteForFamily(family int) (routeStruct, error) {
+	handle, err := netlink.NewHandle()
+	if err != nil {
+		return routeStruct{}, err
+	}
+
+	routeList, err := handle.RouteList(nil, family)
+	if err != nil {
+		return routeStruct{}, err
+	}
+
+	for _, route := range routeList {
+		//  for Default route the Destination should be nil (0)
+		if route.Dst == nil {
+			link, err := handle.LinkByIndex(route.LinkIndex)
+			if err != nil {
+				return routeStruct{}, err
+			}
+			return routeStruct{
+				Iface:   link.Attrs().Name,
+				Gateway: route.Gw.String(),
+			}, nil
+		}
+	}
+	return routeStruct{}, fmt.Errorf("no default gateway found")
 }

@@ -35,8 +35,11 @@ TEST_EXECUTION_TIMEOUT="30m" # may be overriden in scenario file
 SUBSCRIPTION_MANAGER_PLUGIN="${SUBSCRIPTION_MANAGER_PLUGIN:-${SCRIPTDIR}/subscription_manager_register.sh}"  # may be overridden in global settings file
 
 full_vm_name() {
-    local base="${1}"
-    echo "${SCENARIO//@/-}-${base}"
+    local -r base="${1}"
+    local -r type="$(get_scenario_type_from_path "${SCENARIO_SCRIPT}")"
+    # Add a type suffix to the name to allow running scenarios from different
+    # build types on the same hypervisor
+    echo "${SCENARIO//@/-}-${type}-${base}"
 }
 
 # hostname validation
@@ -158,16 +161,14 @@ sos_report() {
 
         vmname=$(basename "${vmdir}")
         ip=$(get_vm_property "${vmname}" ip)
+
+        sos_func="sos_report_for_vm"
         if [ -z "${ip}" ]; then
-            # skip hosts without NICs
-            # FIXME: use virsh to copy sos report files
-            if "${junit}"; then
-                record_junit "${vmname}" "sos-report" "SKIP"
-            fi
-            continue
+            echo "Creating sos reports offline"
+            sos_func="sos_report_for_vm_offline"
         fi
 
-        if ! sos_report_for_vm "${vmdir}" "${vmname}"; then
+        if ! "${sos_func}" "${vmdir}" "${vmname}"; then
             scenario_result=1
             if "${junit}"; then
                 record_junit "${vmname}" "sos-report" "FAILED"
@@ -175,7 +176,7 @@ sos_report() {
         else
             if "${junit}"; then
                 record_junit "${vmname}" "sos-report" "OK"
-            fi
+            fi  
         fi
     done
     return "${scenario_result}"
@@ -188,23 +189,8 @@ sos_report_for_vm() {
     # can't rely on the wrapper being there or working if it
     # is. Copy the script to the host, just in case, along with a
     # wrapper that knows how to execute it or the installed version.
-    cat - >/tmp/sos-wrapper.sh <<EOF
-#!/usr/bin/env bash
-if ! hash sos ; then
-    echo "WARNING: The sos command does not exist"
-elif [ -f /usr/bin/microshift-sos-report ]; then
-    /usr/bin/microshift-sos-report || {
-        echo "WARNING: The /usr/bin/microshift-sos-report script failed"
-    }
-else
-    chmod +x /tmp/microshift-sos-report.sh
-    PROFILES=network,security /tmp/microshift-sos-report.sh || {
-        echo "WARNING: The /tmp/microshift-sos-report.sh script failed"
-    }
-fi
-chmod +r /tmp/sosreport-* || echo "WARNING: The sos report files do not exist in /tmp"
-EOF
-    copy_file_to_vm "${vmname}" "/tmp/sos-wrapper.sh" "/tmp/sos-wrapper.sh"
+
+    copy_file_to_vm "${vmname}" "${ROOTDIR}/test/assets/sos-wrapper.sh" "/tmp/sos-wrapper.sh" 
     copy_file_to_vm "${vmname}" "${ROOTDIR}/scripts/microshift-sos-report.sh" "/tmp/microshift-sos-report.sh"
     run_command_on_vm "${vmname}" "sudo bash -x /tmp/sos-wrapper.sh"
     mkdir -p "${vmdir}/sos"
@@ -230,6 +216,74 @@ EOF
     copy_file_from_vm "${vmname}" "/tmp/var-log-anaconda/*.log" "${vmdir}/anaconda" || {
         echo "WARNING: Ignoring an error when copying anaconda logs"
     }
+}
+
+invoke_qemu_script() {
+    "${ROOTDIR}/_output/robotenv/bin/python" "${ROOTDIR}/test/resources/qemu-guest-agent.py" "$@"
+}
+
+sos_report_for_vm_offline() {
+    local -r vmdir="${1}"
+    local -r vmname="${2}"
+    local -r full_vmname="$(full_vm_name "${vmname}")"
+
+    "${ROOTDIR}/scripts/fetch_tools.sh" "robotframework"
+
+    invoke_qemu_script "wait" \
+        "--vm" "${full_vmname}"
+
+    invoke_qemu_script "upload" \
+        "--vm"  "${full_vmname}" \
+        "--src" "${ROOTDIR}/test/assets/sos-wrapper.sh" \
+        "--dst" "/tmp/sos-wrapper.sh"
+
+    invoke_qemu_script "upload" \
+        "--vm"  "${full_vmname}" \
+        "--src" "${ROOTDIR}/scripts/microshift-sos-report.sh" \
+        "--dst" "/tmp/microshift-sos-report.sh"
+
+    invoke_qemu_script "bash" \
+        "--vm"  "${full_vmname}" \
+        "--args"  "sudo bash -x /tmp/sos-wrapper.sh"
+    
+    mkdir -p "${vmdir}/sos"
+    
+    invoke_qemu_script "download" \
+        "--vm"  "${full_vmname}" \
+        "--src_dir" "/tmp/" \
+        "--dst_dir" "${vmdir}/sos/" \
+        "--filename" "sosreport-*"
+
+    invoke_qemu_script "bash" \
+        "--vm"  "${full_vmname}" \
+        "--args"  "sudo journalctl > /tmp/journal_$(date +'%Y-%m-%d_%H:%M:%S').log"
+
+    invoke_qemu_script "download" \
+        "--vm"  "${full_vmname}" \
+        "--src_dir" "/tmp/" \
+        "--dst_dir" "${vmdir}/sos/" \
+        "--filename" "journal*.log"
+
+    # Also copy the logs from the /var/log/anaconda directory
+    invoke_qemu_script "bash" \
+        "--vm"  "${full_vmname}" \
+        "--args"  "sudo mkdir -p /tmp/var-log-anaconda"
+
+    invoke_qemu_script "bash" \
+        "--vm"  "${full_vmname}" \
+        "--args"  'sudo cp /var/log/anaconda/*.log /tmp/var-log-anaconda/'
+
+    invoke_qemu_script "bash" \
+        "--vm"  "${full_vmname}" \
+        "--args"  "sudo chmod +r /tmp/var-log-anaconda/*.log"
+
+    mkdir -p "${vmdir}/anaconda"
+
+    invoke_qemu_script "download" \
+        "--vm"  "${full_vmname}" \
+        "--src_dir" "/tmp/var-log-anaconda/" \
+        "--dst_dir" "${vmdir}/anaconda/" \
+        "--filename" "*.log" 
 }
 
 # Public function to render a unique kickstart from a template for a
@@ -309,7 +363,8 @@ prepare_kickstart() {
     record_junit "${vmname}" "prepare_kickstart" "OK"
 }
 
-# Checks if provided commit exists in local ostree repository
+# Checks if provided commit exists in local ostree repository.
+# Returns 0 when the ref exists or 1 otherwise.
 does_commit_exist() {
     local -r commit="${1}"
 
@@ -320,11 +375,12 @@ does_commit_exist() {
     fi
 }
 
-# Checks if provided image ref exists in local image storage
+# Checks if provided image ref exists in the mirror registry.
+# Returns 0 when the ref exists or 1 otherwise.
 does_image_exist() {
     local -r image="${1}"
 
-    if [[ "$(sudo podman images -q "${image}")" != "" ]]; then
+    if skopeo inspect "docker://${MIRROR_REGISTRY_URL}/${image}" &>/dev/null ; then
         return 0
     else
         return 1
@@ -337,14 +393,19 @@ function get_vm_ip {
     local -r start=$(date +%s)
     local ip
     ip=$("${ROOTDIR}/scripts/devenv-builder/manage-vm.sh" ip -n "${vmname}" | head -1)
-    while [ "${ip}" = "" ]; do
+    while true; do
         now=$(date +%s)
         if [ $(( now - start )) -ge ${VM_BOOT_TIMEOUT} ]; then
             echo "Timed out while waiting for IP retrieval"
             exit 1
         fi
         sleep 1
+        # Try pinging the IP address to avoid stale DHCP leases that would falsely
+        # return as the current IP for the VM.
         ip=$("${ROOTDIR}/scripts/devenv-builder/manage-vm.sh" ip -n "${vmname}" | head -1)
+        if ping -c 1 -W 1 "${ip}" &> /dev/null; then
+          break
+        fi
     done
     echo "${ip}"
 }
@@ -539,7 +600,7 @@ launch_vm() {
     local -r full_vmname="$(full_vm_name "${vmname}")"
     local -r kickstart_url="${WEB_SERVER_URL}/scenario-info/${SCENARIO}/vms/${vmname}/kickstart.ks"
 
-    local -r vm_pool_name="${VM_POOL_BASENAME}-${SCENARIO}"
+    local -r vm_pool_name="${VM_POOL_BASENAME}-${full_vmname}"
     local -r vm_pool_dir="${VM_DISK_BASEDIR}/${vm_pool_name}"
 
     # See if the VM already exists
@@ -622,7 +683,7 @@ launch_vm() {
     vm_extra_args+=" inst.ks=file:/$(basename "${kickstart_file}")"
     vm_initrd_inject+=" --initrd-inject ${kickstart_file}"
     # Download and inject all the kickstart include files
-    wget -r -q -nd -A "*.cfg" -P "${kickstart_idir}" "$(dirname "${kickstart_url}")"
+    wget -r -q -nd -A "*.cfg" -P "${kickstart_idir}" "$(dirname "${kickstart_url}")/"
     for cfg_file in "${kickstart_idir}"/*.cfg ; do
         vm_initrd_inject+=" --initrd-inject ${cfg_file}"
     done
@@ -760,7 +821,7 @@ remove_vm() {
 
     # Remove the VM storage pool
     if ! ${keep_pool} ; then
-        local -r vm_pool_name="${VM_POOL_BASENAME}-${SCENARIO}"
+        local -r vm_pool_name="${VM_POOL_BASENAME}-${full_vmname}"
         if sudo virsh pool-info "${vm_pool_name}" &>/dev/null; then
             sudo virsh pool-destroy "${vm_pool_name}"
             sudo virsh pool-undefine "${vm_pool_name}"
@@ -1076,10 +1137,15 @@ action_login() {
         vmname="$1"
     fi
 
-    ssh_port=$(get_vm_property "${vmname}" "ssh_port")
+    ssh_port=$(get_vm_property "${vmname}" "ssh_port" || true)
     ip=$(get_vm_property "${vmname}" "ip")
 
-    ssh "redhat@${ip}" -p "${ssh_port}"
+    if [ -z "${ssh_port}" ] ; then
+        local -r full_vmname="$(full_vm_name "${vmname}")"
+        sudo virsh console "${full_vmname}"
+    else
+        ssh "redhat@${ip}" -p "${ssh_port}"
+    fi
 }
 
 action_run() {
