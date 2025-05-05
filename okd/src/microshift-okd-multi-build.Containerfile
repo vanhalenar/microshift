@@ -2,7 +2,7 @@ FROM quay.io/centos-bootc/centos-bootc:stream9 as builder
 
 	
 ARG OKD_REPO=quay.io/okd/scos-release
-ARG OKD_VERSION_TAG=4.17.0-0.okd-scos-2024-08-21-100712
+ARG OKD_VERSION_TAG=4.18.0-okd-scos.4
 ARG REPO_DIR=/src/_output/rpmbuild/RPMS/
 ENV USER=microshift
 ENV HOME=/microshift
@@ -54,6 +54,9 @@ RUN ${REPO_CONFIG_SCRIPT} ${USHIFT_RPM_REPO_PATH} && \
         dnf install -y microshift-flannel ; \
         systemctl disable openvswitch ; \
     fi && \
+    if [ -n "$WITH_TOPOLVM" ] ; then \
+        dnf install -y microshift-topolvm ; \
+    fi && \
     ${REPO_CONFIG_SCRIPT} -delete && \
     rm -f ${REPO_CONFIG_SCRIPT} && \
     rm -rf $USHIFT_RPM_REPO_PATH && \
@@ -79,5 +82,5 @@ RUN if [ -n "$EMBED_CONTAINER_IMAGES" ] ; then \
 
 # Create a systemd unit to recursively make the root filesystem subtree
 # shared as required by OVN images
-COPY ./packaging/imagemode/systemd/microshift-make-rshared.service /etc/systemd/system/microshift-make-rshared.service
+COPY ./packaging/imagemode/systemd/microshift-make-rshared.service /usr/lib/systemd/system/microshift-make-rshared.service
 RUN systemctl enable microshift-make-rshared.service

@@ -29,6 +29,12 @@ dns:
 etcd:
     memoryLimitMB: 0
 ingress:
+    certificateSecret: ""
+    clientTLS:
+        allowedSubjectPatterns: []
+        clientCA:
+            name: ""
+        clientCertificatePolicy: ""
     defaultHTTPVersion: 0
     forwardedHeaderPolicy: ""
     httpCompression:
@@ -41,7 +47,16 @@ ingress:
         https: 0
     routeAdmissionPolicy:
         namespaceOwnership: ""
+        wildcardPolicy: ""
     status: ""
+    tlsSecurityProfile:
+        custom:
+            ciphers: []
+            minTLSVersion: ""
+        intermediate: {}
+        modern: {}
+        old: {}
+        type: ""
     tuningOptions:
         clientFinTimeout: ""
         clientTimeout: ""
@@ -60,6 +75,8 @@ manifests:
 network:
     clusterNetwork: []
     cniPlugin: ""
+    multus:
+        status: ""
     serviceNetwork: []
     serviceNodePortRange: ""
 node:
@@ -71,6 +88,7 @@ storage:
     optionalCsiComponents: []
 telemetry:
     endpoint: ""
+    proxy: ""
     status: ""
 
 ```
@@ -108,6 +126,12 @@ dns:
 etcd:
     memoryLimitMB: 0
 ingress:
+    certificateSecret: router-certs-default
+    clientTLS:
+        allowedSubjectPatterns: []
+        clientCA:
+            name: ""
+        clientCertificatePolicy: ""
     defaultHTTPVersion: 1
     forwardedHeaderPolicy: ""
     httpCompression:
@@ -120,7 +144,16 @@ ingress:
         https: 443
     routeAdmissionPolicy:
         namespaceOwnership: InterNamespaceAllowed
+        wildcardPolicy: ""
     status: Managed
+    tlsSecurityProfile:
+        custom:
+            ciphers: []
+            minTLSVersion: ""
+        intermediate: {}
+        modern: {}
+        old: {}
+        type: ""
     tuningOptions:
         clientFinTimeout: 1s
         clientTimeout: 30s
@@ -144,6 +177,8 @@ network:
     clusterNetwork:
         - 10.42.0.0/16
     cniPlugin: ""
+    multus:
+        status: Disabled
     serviceNetwork:
         - 10.43.0.0/16
     serviceNodePortRange: 30000-32767
@@ -155,7 +190,8 @@ storage:
     driver: ""
     optionalCsiComponents: []
 telemetry:
-    endpoint: https://infogw.api.openshift.com
+    endpoint: https://infogw.api.openshift.com/metrics/v1/receive
+    proxy: ""
     status: Enabled
 
 ```

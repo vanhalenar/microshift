@@ -3,6 +3,7 @@ set -eo pipefail
 
 SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BUILD_AND_RUN=true
+START=true
 INSTALL_BUILD_DEPS=true
 FORCE_FIREWALL=false
 RHEL_SUBSCRIPTION=false
@@ -22,6 +23,7 @@ function usage() {
     echo "Usage: $(basename "$0") [--no-build] [--no-build-deps] [--force-firewall] [--no-set-release-version] <openshift-pull-secret-file>"
     echo ""
     echo "  --no-build                Do not build, install and start MicroShift"
+    echo "  --no-start                Do not start MicroShift after building and installing"
     echo "  --no-build-deps           Do not install dependencies for building binaries and RPMs (implies --no-build)"
     echo "  --force-firewall          Install and configure firewalld regardless of other options"
     echo "  --no-set-release-version  Do NOT set the release subscription to the current release version"
@@ -38,6 +40,10 @@ while [ $# -gt 1 ]; do
     case "$1" in
     --no-build)
         BUILD_AND_RUN=false
+        shift
+        ;;
+    --no-start)
+        START=false
         shift
         ;;
     --no-build-deps)
@@ -288,24 +294,6 @@ if [ ! -e "/etc/crio/openshift-pull-secret" ]; then
     sudo chmod 600 /etc/crio/openshift-pull-secret
 fi
 
-# Optionally configure crun runtime for crio, required on CentOS 9
-if [ -e /etc/crio/crio.conf  ] ; then
-    if ! grep -q '\[crio.runtime.runtimes.crun\]' /etc/crio/crio.conf ; then
-        cat <<EOF | sudo tee -a /etc/crio/crio.conf &>/dev/null
-
-[crio.runtime.runtimes.crun]
-runtime_path = ""
-runtime_type = "oci"
-runtime_root = "/run/crun"
-runtime_config_path = ""
-monitor_path = ""
-monitor_cgroup = "system.slice"
-monitor_exec_cgroup = ""
-privileged_without_host_devices = false
-EOF
-    fi
-fi
-
 if ${BUILD_AND_RUN} || ${FORCE_FIREWALL}; then
     "${DNF_RETRY}" "install" "firewalld"
     sudo systemctl enable firewalld --now
@@ -328,7 +316,9 @@ if ${BUILD_AND_RUN}; then
         # shellcheck disable=SC2046
         "${PULL_RETRY}" $(rpm -qa | grep -e  "microshift.*-release-info" | xargs rpm -ql | grep $(uname -m).json | xargs jq -r '.images | values[]')
     fi
-    sudo systemctl start microshift
+    if ${START}; then
+        sudo systemctl start microshift
+    fi
 
     echo ""
     echo "The configuration phase completed. Run the following commands to:"

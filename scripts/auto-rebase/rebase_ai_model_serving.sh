@@ -22,6 +22,7 @@ PULL_SECRET_FILE="${HOME}/.pull-secret.json"
 RELEASE_JSON="${REPOROOT}/assets/optional/ai-model-serving/release-ai-model-serving-x86_64.json"
 
 KEEP_STAGING="${KEEP_STAGING:-false}"
+NO_BRANCH=${NO_BRANCH:-false}
 
 title() {
     echo -e "\E[34m$1\E[00m";
@@ -35,27 +36,7 @@ check_preconditions() {
 
     if ! hash yq; then
         title "Installing yq"
-
-        local YQ_VER=4.26.1
-        # shellcheck disable=SC2034  # appears unused
-        local YQ_HASH_amd64=9e35b817e7cdc358c1fcd8498f3872db169c3303b61645cc1faf972990f37582
-        # shellcheck disable=SC2034  # appears unused
-        local YQ_HASH_arm64=8966f9698a9bc321eae6745ffc5129b5e1b509017d3f710ee0eccec4f5568766
-        local YQ_HASH
-        YQ_HASH="YQ_HASH_$(go env GOARCH)"
-        local YQ_URL
-        YQ_URL="https://github.com/mikefarah/yq/releases/download/v${YQ_VER}/yq_linux_$(go env GOARCH)"
-        local YQ_EXE
-        YQ_EXE=$(mktemp /tmp/yq-exe.XXXXX)
-        local YQ_SUM
-        YQ_SUM=$(mktemp /tmp/yq-sum.XXXXX)
-        echo -n "${!YQ_HASH} -" > "${YQ_SUM}"
-        if ! (curl -Ls "${YQ_URL}" | tee "${YQ_EXE}" | sha256sum -c "${YQ_SUM}" &>/dev/null); then
-            echo "ERROR: Expected file at ${YQ_URL} to have checksum ${!YQ_HASH} but instead got $(sha256sum <"${YQ_EXE}" | cut -d' ' -f1)"
-            exit 1
-        fi
-        chmod +x "${YQ_EXE}" && sudo cp "${YQ_EXE}" /usr/bin/yq
-        rm -f "${YQ_EXE}" "${YQ_SUM}"
+        sudo DEST_DIR=/usr/bin/ "${REPOROOT}/scripts/fetch_tools.sh" yq
     fi
 
     if ! hash python3; then
@@ -133,6 +114,28 @@ update_kserve() {
         local image_ref="${image#*=}"
         yq -i ".images.${image_name} = \"${image_ref}\"" "${RELEASE_JSON}"
     done
+
+    # Update kserve's config
+    local -r microshift_config="${REPOROOT}/assets/optional/ai-model-serving/kserve/inferenceservice-config-microshift-patch.yaml"
+    local -r rhoai_config="${REPOROOT}/assets/optional/ai-model-serving/kserve/overlays/odh/inferenceservice-config-patch.yaml"
+
+    # Clear the file and add a comment on top
+    cat <<EOF > "${microshift_config}"
+# This is a MicroShift specific kserve configuration.
+# For RHOAI kserve configuration see: assets/optional/ai-model-serving/kserve/overlays/odh/inferenceservice-config-patch.yaml
+# For upstream kserve configuration and description of the config see: assets/optional/ai-model-serving/kserve/configmap/inferenceservice.yaml
+#
+# The difference compared to RHOAI's kserve configuration is the 'deploy' section setting:
+# 'defaultDeploymentMode' set to 'RawDeployment'.
+#
+# The ingress (istio) is disabled (just like RHOAI, unlike the upstream).
+EOF
+
+    # Append upstream RHOAI config
+    cat "${rhoai_config}" >> "${microshift_config}"
+
+    # Change Deployment Mode
+    sed -i 's/"defaultDeploymentMode": "Serverless"/"defaultDeploymentMode": "RawDeployment"/g' "${microshift_config}"
 }
 
 update_runtimes() {
@@ -160,7 +163,7 @@ update_runtimes() {
 images:
 EOF
 
-    local -r images=$(cat "${STAGING_OPERATOR}"/odh-model-controller/base/*.env | grep "\-image")
+    local -r images=$(cat "${STAGING_OPERATOR}"/modelcontroller/base/*.env | grep "\-image")
     for image in ${images}; do
         local image_name="${image%=*}"
         local image_ref="${image#*=}"
@@ -208,9 +211,13 @@ rebase_ai_model_serving_to() {
     process_rhoai_manifests
 
     if [[ -n "$(git status -s assets ./scripts/auto-rebase/last_rebase_ai_model_serving.sh)" ]]; then
-        branch="rebase-ai-model_serving-${version}"
-        title "Detected changes to assets/ or last_rebase_ai_model_serving.sh - creating branch ${branch}"
-        git branch -D "${branch}" 2>/dev/null || true && git checkout -b "${branch}"
+        title "Detected changes to assets/ or last_rebase_ai_model_serving.sh"
+
+        if ! "${NO_BRANCH}"; then
+            branch="rebase-ai-model_serving-${version}"
+            title "Creating branch ${branch}"
+            git branch -D "${branch}" 2>/dev/null || true && git checkout -b "${branch}"
+        fi
 
         title "Committing changes"
         git add assets ./scripts/auto-rebase/last_rebase_ai_model_serving.sh

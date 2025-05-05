@@ -28,7 +28,7 @@ EOF
 
 # hadolint ignore=SC1091
 RUN . /etc/os-release && dnf upgrade -y --releasever="${VERSION_ID}" && \
-    dnf install -y ${DNF_OPTIONS} firewalld microshift && \
+    dnf install -y ${DNF_OPTIONS} firewalld microshift microshift-release-info && \
     systemctl enable microshift && \
     dnf clean all
 
@@ -39,5 +39,5 @@ RUN firewall-offline-cmd --zone=public --add-port=22/tcp && \
 
 # Create a systemd unit to recursively make the root filesystem subtree
 # shared as required by OVN images
-COPY ./systemd/microshift-make-rshared.service /etc/systemd/system/microshift-make-rshared.service
+COPY ./systemd/microshift-make-rshared.service /usr/lib/systemd/system/microshift-make-rshared.service
 RUN systemctl enable microshift-make-rshared.service

@@ -46,21 +46,7 @@ title() {
 check_preconditions() {
     if ! hash yq; then
         title "Installing yq"
-
-        local YQ_VER=4.26.1
-        local YQ_HASH_amd64=9e35b817e7cdc358c1fcd8498f3872db169c3303b61645cc1faf972990f37582
-        local YQ_HASH_arm64=8966f9698a9bc321eae6745ffc5129b5e1b509017d3f710ee0eccec4f5568766
-        local YQ_HASH="YQ_HASH_$(go env GOARCH)"
-        local YQ_URL=https://github.com/mikefarah/yq/releases/download/v${YQ_VER}/yq_linux_$(go env GOARCH)
-        local YQ_EXE=$(mktemp /tmp/yq-exe.XXXXX)
-        local YQ_SUM=$(mktemp /tmp/yq-sum.XXXXX)
-        echo -n "${!YQ_HASH} -" > ${YQ_SUM}
-        if ! (curl -Ls "${YQ_URL}" | tee ${YQ_EXE} | sha256sum -c ${YQ_SUM} &>/dev/null); then
-            echo "ERROR: Expected file at ${YQ_URL} to have checksum ${!YQ_HASH} but instead got $(sha256sum <${YQ_EXE} | cut -d' ' -f1)"
-            exit 1
-        fi
-        chmod +x ${YQ_EXE} && sudo cp ${YQ_EXE} /usr/bin/yq
-        rm -f ${YQ_EXE} ${YQ_SUM}
+        sudo DEST_DIR=/usr/bin/ "${REPOROOT}/scripts/fetch_tools.sh" yq
     fi
 
     if ! hash python3; then
@@ -688,13 +674,14 @@ EOF
     yq -i '.spec.minReadySeconds = 30' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.selector = {"matchLabels": {"ingresscontroller.operator.openshift.io/deployment-ingresscontroller": "default"}}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.metadata += {"labels": {"ingresscontroller.operator.openshift.io/deployment-ingresscontroller": "default"}}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.metadata.annotations += {"openshift.io/required-scc": "restricted"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].image = "{{ .ReleaseImage.haproxy_router }}"' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "STATS_PORT", "value": "1936"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "RELOAD_INTERVAL", "value": "5s"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_ALLOW_WILDCARD_ROUTES", "value": "false"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_ALLOW_WILDCARD_ROUTES", "value": "{{ .RouterAllowWildcardRoutes }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CANONICAL_HOSTNAME", "value": "router-default.apps.{{ .BaseDomain }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERS", "value": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERSUITES", "value": "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERS", "value": "{{ .RouterCiphers }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_CIPHERSUITES", "value": "{{ .RouterCiphersSuites }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DISABLE_HTTP2", "value": "{{ .RouterDisableHttp2 }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_DISABLE_NAMESPACE_OWNERSHIP_CHECK", "value": "{{.RouterNamespaceOwnership}}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_LOAD_BALANCE_ALGORITHM", "value": "random"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
@@ -706,7 +693,7 @@ EOF
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_SET_FORWARDED_HEADERS", "value": "{{ .ForwardedHeaderPolicy }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_TCP_BALANCE_SCHEME", "value": "source"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_THREADS", "value": "{{ .ThreadCount }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.containers[0].env += {"name": "SSL_MIN_VERSION", "value": "TLSv1.2"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.containers[0].env += {"name": "SSL_MIN_VERSION", "value": "{{ .RouterSSLMinVersion }}"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     #    Not use proxy protocol due to lack of load balancer support
     yq -i '.spec.template.spec.containers[0].env += {"name": "ROUTER_USE_PROXY_PROTOCOL", "value": "false"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.containers[0].env += {"name": "GRACEFUL_SHUTDOWN_DELAY", "value": "1s"}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
@@ -741,7 +728,7 @@ EOF
     yq -i '.spec.template.spec.serviceAccount = "router"' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.securityContext = {}' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.spec.template.spec.schedulerName = "default-scheduler"' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
-    yq -i '.spec.template.spec.volumes[0].secret.secretName = "router-certs-default"' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
+    yq -i '.spec.template.spec.volumes[0].secret.secretName = "{{ .ServingCertificateSecret }}"' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     sed -i '/#.*at runtime/d' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     sed -i '/#.*at run-time/d' "${REPOROOT}"/assets/components/openshift-router/deployment.yaml
     yq -i '.metadata.labels += {"ingresscontroller.operator.openshift.io/owning-ingresscontroller": "default"}' "${REPOROOT}"/assets/components/openshift-router/service-internal.yaml
@@ -765,7 +752,21 @@ EOF
     # Must use sed instead of yq because unquoted {{ .RouterHttpPort }} is interpreted as yaml object and yq has no option to not interpret it (like provide is as quoted string but produce unquoted output).
     # It needs to be last manipulation of the file, otherwise yq commands after this one would expand the {{ .RouterHttpPort }}.
     sed -i 's/port: 80/port: {{ .RouterHttpPort }}/g; s/port: 443/port: {{ .RouterHttpsPort }}/g' "${REPOROOT}"/assets/components/openshift-router/service-cloud.yaml
-
+   
+    # patch the manifests 
+    # patch can be created using git:
+    #    git diff HEAD~1 assets/components/openshift-router/deployment.yaml > scripts/auto-rebase/manifests_patches/010-ingress-deployment-clientCA.patch
+    pushd  ${REPOROOT}
+    for patch_file in "${REPOROOT}"/scripts/auto-rebase/manifests_patches/*.patch; do
+        echo "Checking patch ${patch_file}"
+        if git apply --check "${patch_file}" 2> /dev/null; then
+            git apply "${patch_file}"
+            echo "${patch_file} - Patch applied"
+        else
+            echo "Patch was already applied"
+        fi
+    done
+    popd
     #-- service-ca ----------------------------------------
     # Render operand manifest templates like the operator would
     # TODO: Remove the following annotations once CPC correctly creates them automatically
@@ -801,6 +802,7 @@ EOF
 
     update_olm_images
     update_multus_images
+    update_kubeproxy_images
 
     popd >/dev/null
 }
@@ -960,8 +962,8 @@ update_multus_images() {
         arch=${GOARCH_TO_UNAME_MAP["${goarch}"]:-noarch}
 
         local release_file="${STAGING_DIR}/release_${goarch}.json"
-        local kustomization_arch_file="${REPOROOT}/assets/optional/multus/kustomization.${arch}.yaml"
-        local multus_release_json="${REPOROOT}/assets/optional/multus/release-multus-${arch}.json"
+        local kustomization_arch_file="${REPOROOT}/assets/components/multus/kustomization.${arch}.yaml"
+        local multus_release_json="${REPOROOT}/assets/components/multus/release-multus-${arch}.json"
 
         local base_release
         base_release=$(jq -r ".metadata.version" "${release_file}")
@@ -1100,6 +1102,44 @@ patches:
       kind: Deployment
       labelSelector: app=catalog-operator
 EOF
+    done  # for goarch
+}
+
+update_kubeproxy_images() {
+    title "Rebasing kube-proxy images"
+
+    for goarch in amd64 arm64; do
+        arch=${GOARCH_TO_UNAME_MAP["${goarch}"]:-noarch}
+
+        local release_file="${STAGING_DIR}/release_${goarch}.json"
+        local kustomization_arch_file="${REPOROOT}/assets/optional/kube-proxy/kustomization.${arch}.yaml"
+        local kubeproxy_release_json="${REPOROOT}/assets/optional/kube-proxy/release-kube-proxy-${arch}.json"
+
+        local base_release
+        base_release=$(jq -r ".metadata.version" "${release_file}")
+        jq -n "{\"release\": {\"base\": \"$base_release\"}, \"images\": {}}" > "${kubeproxy_release_json}"
+
+        # Create extra kustomization for each arch in separate file.
+        # Right file (depending on arch) should be appended during rpmbuild to kustomization.yaml.
+        cat <<EOF > "${kustomization_arch_file}"
+
+images:
+EOF
+
+        for container in kube-proxy; do
+            local new_image
+            new_image=$(jq -r ".references.spec.tags[] | select(.name == \"${container}\") | .from.name" "${release_file}")
+            local new_image_name="${new_image%@*}"
+            local new_image_digest="${new_image#*@}"
+
+            cat <<EOF >> "${kustomization_arch_file}"
+  - name: ${container}
+    newName: ${new_image_name}
+    digest: ${new_image_digest}
+EOF
+
+            yq -i -o json ".images += {\"${container}\": \"${new_image}\"}" "${kubeproxy_release_json}"
+        done  # for container
     done  # for goarch
 }
 

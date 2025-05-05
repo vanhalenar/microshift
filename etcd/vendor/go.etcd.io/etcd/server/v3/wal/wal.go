@@ -22,9 +22,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
@@ -41,6 +44,7 @@ const (
 	stateType
 	crcType
 	snapshotType
+	metadataModType
 
 	// warnSyncDuration is the amount of time allotted to an fsync before
 	// logging a warning
@@ -61,6 +65,7 @@ var (
 	ErrSnapshotNotFound = errors.New("wal: snapshot not found")
 	ErrSliceOutOfRange  = errors.New("wal: slice bounds out of range")
 	ErrDecoderNotFound  = errors.New("wal: decoder not found")
+	ErrNoMetadata       = errors.New("wal: no metadata found")
 	crcTable            = crc32.MakeTable(crc32.Castagnoli)
 )
 
@@ -92,6 +97,8 @@ type WAL struct {
 
 	locks []*fileutil.LockedFile // the locked files the WAL holds (the name is increasing)
 	fp    *filePipeline
+
+	openshiftWarnFsyncDuration *time.Duration
 }
 
 // Create creates a WAL ready for appending records. The given metadata is
@@ -468,6 +475,18 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 			}
 			metadata = rec.Data
 
+		case metadataModType:
+			if metadata == nil {
+				state.Reset()
+				return nil, state, nil, ErrNoMetadata
+			}
+
+			var meta, metaMod etcdserverpb.Metadata
+			pbutil.MustUnmarshal(&meta, metadata)
+			pbutil.MustUnmarshal(&metaMod, rec.Data)
+			meta.ClusterID = metaMod.ClusterID
+			metadata = pbutil.MustMarshal(&meta)
+
 		case crcType:
 			crc := decoder.crc.Sum32()
 			// current crc of decoder must match the crc of the record.
@@ -797,11 +816,25 @@ func (w *WAL) sync() error {
 		return nil
 	}
 
+	if w.openshiftWarnFsyncDuration == nil {
+		defaultWarnFsyncDuration := warnSyncDuration
+		w.openshiftWarnFsyncDuration = &defaultWarnFsyncDuration
+		if warnFsyncDurationOverride := os.Getenv("OPENSHIFT_WARN_FSYNC_DURATION"); warnFsyncDurationOverride != "" {
+			override, err := strconv.Atoi(warnFsyncDurationOverride)
+			if err != nil {
+				w.lg.Sugar().Infof("OPENSHIFT_WARN_FSYNC_DURATION specified but could not be parsed. falling back to default of %v. parse error: %v", warnSyncDuration, err)
+			} else {
+				openshiftWarnFsyncDuration := time.Duration(override) * time.Second
+				w.openshiftWarnFsyncDuration = &openshiftWarnFsyncDuration
+			}
+		}
+	}
+
 	start := time.Now()
 	err := fileutil.Fdatasync(w.tail().File)
 
 	took := time.Since(start)
-	if took > warnSyncDuration {
+	if took > *w.openshiftWarnFsyncDuration {
 		w.lg.Warn(
 			"slow fdatasync",
 			zap.Duration("took", took),
@@ -912,12 +945,25 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 	return w.encoder.encode(rec)
 }
 
+func (w *WAL) SaveMetadata(metadata *etcdserverpb.Metadata) error {
+	b := pbutil.MustMarshal(metadata)
+	rec := &walpb.Record{Type: metadataModType, Data: b}
+	if err := w.encoder.encode(rec); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
+	return w.SaveWithMetadata(st, ents, nil)
+}
+
+func (w *WAL) SaveWithMetadata(st raftpb.HardState, ents []raftpb.Entry, metadata *etcdserverpb.Metadata) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	// short cut, do not call sync
-	if raft.IsEmptyHardState(st) && len(ents) == 0 {
+	if metadata == nil && raft.IsEmptyHardState(st) && len(ents) == 0 {
 		return nil
 	}
 
@@ -929,6 +975,13 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			return err
 		}
 	}
+
+	if metadata != nil {
+		if err := w.SaveMetadata(metadata); err != nil {
+			return err
+		}
+	}
+
 	if err := w.saveState(&st); err != nil {
 		return err
 	}

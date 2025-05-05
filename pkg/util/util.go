@@ -2,12 +2,13 @@ package util
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"math/rand/v2"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -144,19 +145,71 @@ func (l LogFilePath) Remove() error {
 	return err
 }
 
-// GenerateUniqueTempPath returns a filepath from given path with extra suffix
-// which doesn't exist.
-func GenerateUniqueTempPath(path string) (string, error) {
-	// 1000 tries
-	for i := 0; i < 1000; i++ {
-		//nolint:gosec
-		rnd := rand.IntN(100000)
-		newPath := fmt.Sprintf("%s.tmp.%d", path, rnd)
-		if exists, err := PathExists(newPath); err != nil {
-			return "", err
-		} else if !exists {
-			return newPath, nil
+// GetTempPathArgs returns the directory in which to create a temp file
+// along with the pattern for the temp file name.
+func getTempPathArgs(path string) (string, string) {
+	dir, file := filepath.Split(path)
+	pattern := file + ".tmp."
+	return dir, pattern
+}
+
+// CreateTempFile creates a temporary file from given path and returns
+// resulting file
+func CreateTempFile(path string) (*os.File, error) {
+	dir, pattern := getTempPathArgs(path)
+	return os.CreateTemp(dir, pattern)
+}
+
+// CreateTempDir creates a temporary directory from given path and returns
+// the pathname of the new directory.
+func CreateTempDir(path string) (string, error) {
+	dir, pattern := getTempPathArgs(path)
+	return os.MkdirTemp(dir, pattern)
+}
+
+func IsOSTree() (bool, error) {
+	return PathExists("/run/ostree-booted")
+}
+
+func GetOSVersion() (string, error) {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", fmt.Errorf("error reading /etc/os-release: %v", err)
+	}
+	content := string(data)
+
+	var version string
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "VERSION_ID=") {
+			version = strings.TrimPrefix(line, "VERSION_ID=")
+			version = strings.Trim(version, `"`)
+			break
 		}
 	}
-	return "", fmt.Errorf("attempted to generate unique temporary path (%q) for 1000 tries - giving up", path)
+	if version == "" {
+		return "", fmt.Errorf("VERSION_ID not found in /etc/os-release")
+	}
+	return version, nil
+}
+
+func IsBootc() bool {
+	cmd := exec.Command("bootc", "status", "--booted", "--json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	var result struct {
+		Status struct {
+			Type string `json:"type"`
+		} `json:"status"`
+	}
+
+	err = json.Unmarshal(output, &result)
+	if err != nil {
+		return false
+	}
+
+	return result.Status.Type == "bootcHost"
 }

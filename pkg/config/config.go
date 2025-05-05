@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
+	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/microshift/pkg/config/apiserver"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	netutils "k8s.io/utils/net"
@@ -144,6 +144,7 @@ func (c *Config) fillDefaults() error {
 		Status: StatusManaged,
 		AdmissionPolicy: RouteAdmissionPolicy{
 			NamespaceOwnership: NamespaceOwnershipAllowed,
+			WildcardPolicy:     WildcardPolicyDisallowed,
 		},
 		Ports: IngressPortsConfig{
 			Http:  ptr.To[int](80),
@@ -166,6 +167,10 @@ func (c *Config) fillDefaults() error {
 		LogEmptyRequests:         "Log",
 		ForwardedHeaderPolicy:    "Append",
 		HTTPEmptyRequestsPolicy:  "Respond",
+		ServingCertificateSecret: "router-certs-default",
+		TLSSecurityProfile: &configv1.TLSSecurityProfile{
+			Type: configv1.TLSProfileIntermediateType,
+		},
 	}
 	c.MultiNode.Enabled = false
 	c.Kubelet = nil
@@ -208,6 +213,10 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	}
 	if u.Network.DNS != "" {
 		c.Network.DNS = u.Network.DNS
+	}
+
+	if u.Network.Multus.Status != "" {
+		c.Network.Multus.Status = u.Network.Multus.Status
 	}
 
 	if u.Etcd.MemoryLimitMB != 0 {
@@ -352,6 +361,22 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	}
 	if u.Telemetry.Endpoint != "" {
 		c.Telemetry.Endpoint = u.Telemetry.Endpoint
+	}
+	if u.Telemetry.Proxy != "" {
+		c.Telemetry.Proxy = u.Telemetry.Proxy
+	}
+	if len(u.Ingress.ServingCertificateSecret) != 0 {
+		c.Ingress.ServingCertificateSecret = u.Ingress.ServingCertificateSecret
+	}
+	if u.Ingress.TLSSecurityProfile != nil {
+		c.Ingress.TLSSecurityProfile = u.Ingress.TLSSecurityProfile
+	}
+
+	if len(u.Ingress.AdmissionPolicy.WildcardPolicy) != 0 {
+		c.Ingress.AdmissionPolicy.WildcardPolicy = u.Ingress.AdmissionPolicy.WildcardPolicy
+	}
+	if len(u.Ingress.ClientTLS.ClientCertificatePolicy) != 0 {
+		c.Ingress.ClientTLS = u.Ingress.ClientTLS
 	}
 }
 
