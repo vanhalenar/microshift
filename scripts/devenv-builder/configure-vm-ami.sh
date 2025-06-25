@@ -91,11 +91,7 @@ if [ ! -x "${DNF_RETRY}" ] ; then
     curl -s "https://raw.githubusercontent.com/openshift/microshift/main/scripts/dnf_retry.sh" -o "${DNF_RETRY}"
     chmod 755 "${DNF_RETRY}"
 fi
-if [ ! -x "${RHOCP_REPO}" ] ; then
-    RHOCP_REPO=$(mktemp /tmp/get-latest-rhocp-repo.XXXXXXXX.sh)
-    curl -s "https://raw.githubusercontent.com/openshift/microshift/main/scripts/get-latest-rhocp-repo.sh" -o "${RHOCP_REPO}"
-    chmod 755 "${RHOCP_REPO}"
-fi
+
 if [ ! -f "${MAKE_VERSION}" ] ; then
     MAKE_VERSION=$(mktemp "/tmp/Makefile.version.$(uname -m).XXXXXXXX.var")
     curl -s "https://raw.githubusercontent.com/openshift/microshift/main/Makefile.version.$(uname -m).var" -o "${MAKE_VERSION}"
@@ -203,7 +199,7 @@ fi
 
 
 
-RHOCP=$("${RHOCP_REPO}")
+RHOCP="${RHOCP_REPO}"
 if [[ "${RHOCP}" =~ ^[0-9]{2} ]]; then
     #sudo subscription-manager repos --enable "rhocp-4.${RHOCP}-for-rhel-9-$(uname -m)-rpms"
 elif [[ "${RHOCP}" =~ ^http ]]; then
