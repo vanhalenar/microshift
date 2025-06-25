@@ -200,9 +200,7 @@ fi
 
 
 RHOCP="${RHOCP_REPO}"
-if [[ "${RHOCP}" =~ ^[0-9]{2} ]]; then
-    #sudo subscription-manager repos --enable "rhocp-4.${RHOCP}-for-rhel-9-$(uname -m)-rpms"
-elif [[ "${RHOCP}" =~ ^http ]]; then
+if [[ "${RHOCP}" =~ ^http ]]; then
     url=$(echo "${RHOCP}" | cut -d, -f1)
     ver=$(echo "${RHOCP}" | cut -d, -f2)
     OCP_REPO_NAME="rhocp-4.${ver}-for-rhel-9-mirrorbeta-$(uname -i)-rpms"
@@ -231,21 +229,8 @@ fi
 #     sudo subscription-manager repos --enable "fast-datapath-for-rhel-${VERSION_ID_MAJOR}-$(uname -m)-rpms"
 # fi
 
+"${DNF_RETRY}" "install" "openshift-clients"
 
-if ${RHEL_SUBSCRIPTION}; then
-    "${DNF_RETRY}" "install" "openshift-clients"
-else
-    # Assume the current development version on non-RHEL OS
-    OCPVERSION="4.$(cut -d'.' -f2 "${MAKE_VERSION}")"
-    OCC_SRC="https://mirror.openshift.com/pub/openshift-v4/$(uname -m)/dependencies/rpms/${OCPVERSION}-el9-beta"
-    OCC_RPM="$(curl -s "${OCC_SRC}/" | grep -o "openshift-clients-4[^\"']*.rpm" | sort | uniq)"
-    OCC_LOC="$(mktemp /tmp/openshift-client-XXXXX.rpm)"
-    OCC_REM="${OCC_SRC}/${OCC_RPM}"
-
-    curl -s "${OCC_REM}" --output "${OCC_LOC}"
-    "${DNF_RETRY}" "localinstall" "${OCC_LOC}"
-    rm -f "${OCC_LOC}"
-fi
 
 # Configure OpenShift pull secret
 if [ ! -e "/etc/crio/openshift-pull-secret" ]; then
