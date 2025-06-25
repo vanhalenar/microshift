@@ -201,17 +201,16 @@ if ${BUILD_AND_RUN}; then
     make srpm
 fi
 
-if ${RHEL_SUBSCRIPTION}; then
-    sudo subscription-manager config --rhsm.manage_repos=1
 
-    RHOCP=$("${RHOCP_REPO}")
-    if [[ "${RHOCP}" =~ ^[0-9]{2} ]]; then
-        sudo subscription-manager repos --enable "rhocp-4.${RHOCP}-for-rhel-9-$(uname -m)-rpms"
-    elif [[ "${RHOCP}" =~ ^http ]]; then
-        url=$(echo "${RHOCP}" | cut -d, -f1)
-        ver=$(echo "${RHOCP}" | cut -d, -f2)
-        OCP_REPO_NAME="rhocp-4.${ver}-for-rhel-9-mirrorbeta-$(uname -i)-rpms"
-        sudo tee "/etc/yum.repos.d/${OCP_REPO_NAME}.repo" >/dev/null <<EOF
+
+RHOCP=$("${RHOCP_REPO}")
+if [[ "${RHOCP}" =~ ^[0-9]{2} ]]; then
+    #sudo subscription-manager repos --enable "rhocp-4.${RHOCP}-for-rhel-9-$(uname -m)-rpms"
+elif [[ "${RHOCP}" =~ ^http ]]; then
+    url=$(echo "${RHOCP}" | cut -d, -f1)
+    ver=$(echo "${RHOCP}" | cut -d, -f2)
+    OCP_REPO_NAME="rhocp-4.${ver}-for-rhel-9-mirrorbeta-$(uname -i)-rpms"
+    sudo tee "/etc/yum.repos.d/${OCP_REPO_NAME}.repo" >/dev/null <<EOF
 [${OCP_REPO_NAME}]
 name=Beta rhocp-4.${ver} RPMs for RHEL 9
 baseurl=${url}
@@ -219,35 +218,23 @@ enabled=1
 gpgcheck=0
 skip_if_unavailable=0
 EOF
-        PREVIOUS_RHOCP=$("${RHOCP_REPO}" $((ver-1)))
-        if [[ "${PREVIOUS_RHOCP}" =~ ^[0-9]{2} ]]; then
-            sudo subscription-manager repos --enable "rhocp-4.${PREVIOUS_RHOCP}-for-rhel-9-$(uname -m)-rpms"
-        else
-            # If RHOCP Y-1 is not available, try RHOCP Y-2.
-            Y2_RHOCP=$("${RHOCP_REPO}" $((ver-2)))
-            if [[ "${Y2_RHOCP}" =~ ^[0-9]{2} ]]; then
-                sudo subscription-manager repos --enable "rhocp-4.${Y2_RHOCP}-for-rhel-9-$(uname -m)-rpms"
-            fi
-        fi
-    fi
-
-    # Enable fast-datapath (ovn) only for non-beta. Beta RHEL will use openvswitch from RHOCP beta mirror.
-    if ! ${RHEL_BETA_VERSION}; then
-        sudo subscription-manager repos --enable "fast-datapath-for-rhel-${VERSION_ID_MAJOR}-$(uname -m)-rpms"
-    fi
-else
-    "${DNF_RETRY}" "install" "centos-release-nfv-common"
-    sudo dnf copr enable -y @OKD/okd "centos-stream-9-$(uname -m)"
-    sudo tee "/etc/yum.repos.d/openvswitch2-$(uname -m)-rpms.repo" >/dev/null <<EOF
-[sig-nfv]
-name=CentOS Stream 9 - SIG NFV
-baseurl=http://mirror.stream.centos.org/SIGs/9-stream/nfv/\$basearch/openvswitch-2/
-gpgcheck=1
-enabled=1
-skip_if_unavailable=0
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-NFV
-EOF
+    #PREVIOUS_RHOCP=$("${RHOCP_REPO}" $((ver-1)))
+    #if [[ "${PREVIOUS_RHOCP}" =~ ^[0-9]{2} ]]; then
+    #    sudo subscription-manager repos --enable "rhocp-4.${PREVIOUS_RHOCP}-for-rhel-9-$(uname -m)-rpms"
+    #else
+    #    # If RHOCP Y-1 is not available, try RHOCP Y-2.
+    #    Y2_RHOCP=$("${RHOCP_REPO}" $((ver-2)))
+    #    if [[ "${Y2_RHOCP}" =~ ^[0-9]{2} ]]; then
+    #        sudo subscription-manager repos --enable "rhocp-4.${Y2_RHOCP}-for-rhel-9-$(uname -m)-rpms"
+    #    fi
+    #fi
 fi
+
+# Enable fast-datapath (ovn) only for non-beta. Beta RHEL will use openvswitch from RHOCP beta mirror.
+# if ! ${RHEL_BETA_VERSION}; then
+#     sudo subscription-manager repos --enable "fast-datapath-for-rhel-${VERSION_ID_MAJOR}-$(uname -m)-rpms"
+# fi
+
 
 if ${RHEL_SUBSCRIPTION}; then
     "${DNF_RETRY}" "install" "openshift-clients"
@@ -262,29 +249,6 @@ else
     curl -s "${OCC_REM}" --output "${OCC_LOC}"
     "${DNF_RETRY}" "localinstall" "${OCC_LOC}"
     rm -f "${OCC_LOC}"
-fi
-
-if ${BUILD_AND_RUN}; then
-    if ${OPTIONAL_RPMS}; then
-        # Skip gateway api rpms because:
-        # - Feature is still dev preview and no tests/docs are guaranteed.
-        # - There is one issue with conformance (see USHIFT-4757) that needs to be addressed in the operator.
-
-        if [ -n "${OPTIONAL_SKIPPED_RPMS}" ] ; then
-            SKIPPED_RPMS="gateway-api ${OPTIONAL_SKIPPED_RPMS//,/ }"
-        else
-            SKIPPED_RPMS="gateway-api"
-        fi
-        
-        # shellcheck disable=SC2046,SC2086
-        "${DNF_RETRY}" "localinstall" "$(find ~/microshift/_output/rpmbuild/RPMS -type f -name "*.rpm" $(printf ' -not -name *%s* ' ${SKIPPED_RPMS}))" 
-    else
-        createrepo "${HOME}/microshift/_output/rpmbuild"
-        "${DNF_RETRY}" "install" \
-            "microshift microshift-release-info \
-            --repofrompath=microshift-local,${HOME}/microshift/_output/rpmbuild \
-            --setopt=microshift-local.gpgcheck=0"
-    fi
 fi
 
 # Configure OpenShift pull secret
@@ -308,32 +272,6 @@ if ${BUILD_AND_RUN} || ${FORCE_FIREWALL}; then
     sudo firewall-cmd --permanent --zone=public --add-port=6443/tcp
     sudo firewall-cmd --permanent --zone=public --add-service=mdns
     sudo firewall-cmd --reload
-fi
-
-if ${BUILD_AND_RUN}; then
-    sudo systemctl enable --now crio
-    if ${PULL_IMAGES}; then
-        # Skip ai-model-serving images because of the size and not all are needed (HW dependent).
-        # shellcheck disable=SC2046
-        "${PULL_RETRY}" $(rpm -qa | grep -e  "microshift.*-release-info" | grep -v 'ai-model-serving' | xargs rpm -ql | grep $(uname -m).json | xargs jq -r '.images | values[]')
-    fi
-    if ${START}; then
-        sudo systemctl start microshift
-    fi
-
-    echo ""
-    echo "The configuration phase completed. Run the following commands to:"
-    echo " - Wait until all MicroShift pods are running"
-    echo "      watch sudo \$(which oc) --kubeconfig /var/lib/microshift/resources/kubeadmin/kubeconfig get pods -A"
-    echo ""
-    echo " - Get MicroShift logs"
-    echo "      sudo journalctl -u microshift"
-    echo ""
-    echo " - Get microshift-etcd logs"
-    echo "      sudo journalctl -u microshift-etcd.scope"
-    echo ""
-    echo " - Clean up MicroShift service configuration"
-    echo "      echo 1 | sudo microshift-cleanup-data --all"
 fi
 
 end="$(date +%s)"
