@@ -14,7 +14,7 @@ PULL_IMAGES=false
 OPTIONAL_RPMS=false
 DNF_RETRY="${SCRIPTDIR}/../dnf_retry.sh"
 PULL_RETRY="${SCRIPTDIR}/../pull_retry.sh"
-RHOCP_REPO="${SCRIPTDIR}/../get-latest-rhocp-repo.sh"
+RHOCP_REPO="https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rpms/4.20-el9-beta/,20"
 MAKE_VERSION="${SCRIPTDIR}/../../Makefile.version.$(uname -m).var"
 
 start=$(date +%s)
