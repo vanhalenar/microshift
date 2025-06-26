@@ -1,0 +1,6 @@
+- oc image-arm64 d6d8c4b4cbae0c73d2a3f78568136a494cac16a4 to ea5c72052233361761ba371b7c39518d443422be
+  - 305aa891 2025-06-20T01:16:15-04:00 Simplify TarEntryCallback
+
+- kubernetes image-arm64 d92880b14300b76b867a83ec887e280a5b77b52e to 62bb9f355bf8568bf1f70b33de574e27e6b446f2
+  - 25a5bda9d 2025-06-20T10:56:32-04:00 UPSTREAM: <carry>: Update rebase.sh to handle go versions major.minor.patch instead of just major.minor
+
