@@ -57,18 +57,18 @@ if [ ! -e "/etc/crio/openshift-pull-secret" ]; then
 fi
 
 "${DNF_RETRY}" "install" "firewalld"
-sudo systemctl enable firewalld --now
-sudo firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16
-sudo firewall-cmd --permanent --zone=trusted --add-source=169.254.169.1
-sudo firewall-cmd --permanent --zone=trusted --add-source=fd01::/48
-sudo firewall-cmd --permanent --zone=public --add-port=80/tcp
-sudo firewall-cmd --permanent --zone=public --add-port=443/tcp
-sudo firewall-cmd --permanent --zone=public --add-port=5353/udp
-sudo firewall-cmd --permanent --zone=public --add-port=30000-32767/tcp
-sudo firewall-cmd --permanent --zone=public --add-port=30000-32767/udp
-sudo firewall-cmd --permanent --zone=public --add-port=6443/tcp
-sudo firewall-cmd --permanent --zone=public --add-service=mdns
-sudo firewall-cmd --reload
+# sudo systemctl enable firewalld --now
+# sudo firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16
+# sudo firewall-cmd --permanent --zone=trusted --add-source=169.254.169.1
+# sudo firewall-cmd --permanent --zone=trusted --add-source=fd01::/48
+# sudo firewall-cmd --permanent --zone=public --add-port=80/tcp
+# sudo firewall-cmd --permanent --zone=public --add-port=443/tcp
+# sudo firewall-cmd --permanent --zone=public --add-port=5353/udp
+# sudo firewall-cmd --permanent --zone=public --add-port=30000-32767/tcp
+# sudo firewall-cmd --permanent --zone=public --add-port=30000-32767/udp
+# sudo firewall-cmd --permanent --zone=public --add-port=6443/tcp
+# sudo firewall-cmd --permanent --zone=public --add-service=mdns
+# sudo firewall-cmd --reload
 
 end="$(date +%s)"
 duration_total_seconds=$((end - start))
