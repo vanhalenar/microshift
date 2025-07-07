@@ -10,6 +10,7 @@ import re
 import sys
 import time
 import traceback
+import json
 
 import common
 
@@ -20,6 +21,7 @@ import common
 SCRIPTDIR = common.get_env_var('SCRIPTDIR')
 BOOTC_IMAGE_DIR = common.get_env_var('BOOTC_IMAGE_DIR')
 BOOTC_ISO_DIR = common.get_env_var('BOOTC_ISO_DIR')
+BOOTC_AMI_DIR = common.get_env_var('BOOTC_AMI_DIR')
 IMAGEDIR = common.get_env_var('IMAGEDIR')
 VM_DISK_BASEDIR = common.get_env_var('VM_DISK_BASEDIR')
 UNAME_M = common.get_env_var('UNAME_M')
@@ -290,6 +292,8 @@ def process_containerfile(groupdir, containerfile, dry_run):
                 "--cache-to", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "--cache-from", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "-t", cf_outname, "-f", cf_outfile,
+                # "--volume", "/etc/pki/entitlement:/etc/pki/entitlement:ro",
+                # "--secret", "id=rhsm-conf,src=/etc/rhsm/rhsm.conf",
                 IMAGEDIR
             ]
             start = time.time()
@@ -408,6 +412,106 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
             ["sudo", "chown", "-R", f"{getpass.getuser()}.", bf_outdir],
             dry_run)
         os.rename(f"{bf_outdir}/bootiso/install.iso", bf_targetiso)
+
+""" def ami_exists(ami_name, aws_region, dry_run):
+    if dry_run:
+        print(f"DRY RUN: Would check for AMI '{ami_name}' in region {aws_region}")
+        return False
+
+    common.print_msg(f"Checking for existing AMI named '{ami_name}'...")
+    cmd = [
+        "aws", "ec2", "describe-images",
+        "--region", aws_region,
+        "--owners", "self",
+        "--filters", f"Name=name,Values={ami_name}"
+    ]
+    # Assumes a helper that can run a command and return its stdout
+    result = common.run_command_and_get_output(cmd)
+    try:
+        data = json.loads(result)
+        if data.get("Images"):
+            common.print_msg(f"AMI '{ami_name}' already exists, skipping build.")
+            return True
+    except (json.JSONDecodeError, KeyError) as e:
+        common.print_msg(f"Warning: Could not parse AWS CLI output: {e}")
+    return False """
+
+
+def process_ami_bootc(groupdir, bootcfile, dry_run):
+    bf_path, bf_outname, bf_outdir, bf_logfile = get_process_file_names(
+        groupdir, bootcfile, BOOTC_AMI_DIR)
+    bf_target_ami_name = f"bootc-ami-{bf_outname}" 
+    """ if ami_exists(bf_target_ami_name, "eu-west-1", dry_run):
+        common.record_junit(bf_path, "process-bootc-ami", "SKIPPED")
+        return """
+    
+    os.makedirs(bf_outdir, exist_ok=True)
+    os.makedirs(VM_DISK_BASEDIR, exist_ok=True)
+    # Run template command on the input file
+    bf_outfile = os.path.join(BOOTC_AMI_DIR, bootcfile)
+    run_template_cmd(bf_path, bf_outfile, dry_run)
+    # Templating may generate an empty file
+    if not dry_run:
+        if not common.file_has_valid_lines(bf_outfile):
+            common.print_msg(f"Skipping an empty {bootcfile} file")
+            return
+
+    common.print_msg(f"Processing {bootcfile} with logs in {bf_logfile}")
+    start_process_bootc_ami = time.time()
+    try:
+        # Redirect the output to the log file
+        with open(bf_logfile, 'w') as logfile:
+            # Download the bootc image builder itself in case
+            # it requires authorization for accessing the image
+            pull_args = [
+                "sudo", "podman", "pull",
+                "--authfile", PULL_SECRET, BIB_IMAGE
+            ]
+            start = time.time()
+            common.retry_on_exception(3, common.run_command_in_shell, pull_args, dry_run, logfile, logfile)
+            common.record_junit(bf_path, "pull-bootc-bib", "OK", start)
+
+            # Read the image reference
+            bf_imgref = common.read_file_valid_lines(bf_outfile).strip()
+
+            # If not already local, download the image to be used by bootc image builder
+            if not bf_imgref.startswith('localhost/'):
+                pull_args = [
+                    "sudo", "podman", "pull",
+                    "--authfile", PULL_SECRET, bf_imgref
+                ]
+                start = time.time()
+                common.retry_on_exception(3, common.run_command_in_shell, pull_args, dry_run, logfile, logfile)
+                common.record_junit(bf_path, "pull-bootc-image", "OK", start)
+
+            # The podman command with security elevation and
+            # mount of output / container storage
+            build_args = [
+                "sudo", "podman", "run",
+                "--rm", "-i", "--privileged",
+                "--pull=newer",
+                "--security-opt", "label=type:unconfined_t",
+                "-v", f"{bf_outdir}:/output",
+                "-v", "/var/lib/containers/storage:/var/lib/containers/storage",
+                "-v", f"{os.path.expanduser('~')}/.aws:/root/.aws:ro",
+                BIB_IMAGE,
+                "--type", "ami",
+                "--local",
+                #"--aws-ami-name", "centos-bootc-ami",
+                #"--aws-bucket", "microshift-ami-cache-eu-west-1",
+                #"--aws-region", "eu-west-1",
+                bf_imgref
+            ]
+            start = time.time()
+            common.retry_on_exception(3, common.run_command_in_shell, build_args, dry_run, logfile, logfile)
+            common.record_junit(bf_path, "build-bootc-image", "OK", start)
+    except Exception:
+        common.record_junit(bf_path, "process-bootc-image", "FAILED", start_process_bootc_ami, log_filepath=bf_logfile)
+        # Propagate the exception to the caller
+        raise
+    finally:
+        # Always display the command logs with the prefix on each line
+        common.run_command(["sed", f"s/^/{bf_outname}: /", bf_logfile], dry_run)
 
 
 def process_container_encapsulate(groupdir, containerfile, dry_run):
@@ -539,6 +643,11 @@ def process_group(groupdir, build_type, pattern="*", dry_run=False):
                         common.print_msg(f"Skipping '{file}' due to '{build_type}' filter")
                         continue
                     futures.append(executor.submit(process_container_encapsulate, groupdir, file, dry_run))
+                elif file.endswith(".ami-bootc"):
+                    if build_type and build_type != "ami":
+                        common.print_msg(f"Skipping '{file}' due to '{build_type}' filter")
+                        continue
+                    futures.append(executor.submit(process_ami_bootc, groupdir, file, dry_run))
                 elif not file.endswith(".template"):
                     common.print_msg(f"Skipping unknown file {file}")
 
@@ -567,7 +676,7 @@ def main():
     parser.add_argument("-f", "--force-rebuild", action="store_true", help="Force rebuilding images that already exist.")
     parser.add_argument("-E", "--no-extract-images", action="store_true", help="Skip container image extraction.")
     parser.add_argument("-b", "--build-type",
-                        choices=["image-bootc", "containerfile", "container-encapsulate"],
+                        choices=["image-bootc", "containerfile", "container-encapsulate", "ami"],
                         help="Only build images of the specified type.")
     dirgroup = parser.add_mutually_exclusive_group(required=True)
     dirgroup.add_argument("-l", "--layer-dir", type=str, help="Path to the layer directory to process.")

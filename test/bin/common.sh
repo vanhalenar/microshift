@@ -84,6 +84,8 @@ export BOOTC_IMAGE_DIR="${IMAGEDIR}/bootc-images"
 # Location of images produced by bootc ISO build procedure
 export BOOTC_ISO_DIR="${IMAGEDIR}/bootc-iso-images"
 
+export BOOTC_AMI_DIR="${IMAGEDIR}/bootc-ami-images"
+
 # Location of data files created by the tools for managing scenarios
 # as they are run.
 #
