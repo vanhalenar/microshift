@@ -292,6 +292,7 @@ def process_containerfile(groupdir, containerfile, dry_run):
                 "--cache-to", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "--cache-from", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "-t", cf_outname, "-f", cf_outfile,
+                "--no-cache",
                 # "--volume", "/etc/pki/entitlement:/etc/pki/entitlement:ro",
                 # "--secret", "id=rhsm-conf,src=/etc/rhsm/rhsm.conf",
                 IMAGEDIR
@@ -497,9 +498,9 @@ def process_ami_bootc(groupdir, bootcfile, dry_run):
                 BIB_IMAGE,
                 "--type", "ami",
                 "--local",
-                #"--aws-ami-name", "centos-bootc-ami",
-                #"--aws-bucket", "microshift-ami-cache-eu-west-1",
-                #"--aws-region", "eu-west-1",
+                "--aws-ami-name", "microshift-rhel96-bootc-ami",
+                "--aws-bucket", "microshift-ami-cache-eu-west-1",
+                "--aws-region", "eu-west-1",
                 bf_imgref
             ]
             start = time.time()
