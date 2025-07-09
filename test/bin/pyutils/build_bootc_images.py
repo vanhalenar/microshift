@@ -292,9 +292,6 @@ def process_containerfile(groupdir, containerfile, dry_run):
                 "--cache-to", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "--cache-from", f"{MIRROR_REGISTRY}/{cf_outname}",
                 "-t", cf_outname, "-f", cf_outfile,
-                "--no-cache",
-                # "--volume", "/etc/pki/entitlement:/etc/pki/entitlement:ro",
-                # "--secret", "id=rhsm-conf,src=/etc/rhsm/rhsm.conf",
                 IMAGEDIR
             ]
             start = time.time()
@@ -414,37 +411,11 @@ def process_image_bootc(groupdir, bootcfile, dry_run):
             dry_run)
         os.rename(f"{bf_outdir}/bootiso/install.iso", bf_targetiso)
 
-""" def ami_exists(ami_name, aws_region, dry_run):
-    if dry_run:
-        print(f"DRY RUN: Would check for AMI '{ami_name}' in region {aws_region}")
-        return False
-
-    common.print_msg(f"Checking for existing AMI named '{ami_name}'...")
-    cmd = [
-        "aws", "ec2", "describe-images",
-        "--region", aws_region,
-        "--owners", "self",
-        "--filters", f"Name=name,Values={ami_name}"
-    ]
-    # Assumes a helper that can run a command and return its stdout
-    result = common.run_command_and_get_output(cmd)
-    try:
-        data = json.loads(result)
-        if data.get("Images"):
-            common.print_msg(f"AMI '{ami_name}' already exists, skipping build.")
-            return True
-    except (json.JSONDecodeError, KeyError) as e:
-        common.print_msg(f"Warning: Could not parse AWS CLI output: {e}")
-    return False """
-
 
 def process_ami_bootc(groupdir, bootcfile, dry_run):
     bf_path, bf_outname, bf_outdir, bf_logfile = get_process_file_names(
         groupdir, bootcfile, BOOTC_AMI_DIR)
     bf_target_ami_name = f"bootc-ami-{bf_outname}" 
-    """ if ami_exists(bf_target_ami_name, "eu-west-1", dry_run):
-        common.record_junit(bf_path, "process-bootc-ami", "SKIPPED")
-        return """
     
     os.makedirs(bf_outdir, exist_ok=True)
     os.makedirs(VM_DISK_BASEDIR, exist_ok=True)
@@ -498,6 +469,7 @@ def process_ami_bootc(groupdir, bootcfile, dry_run):
                 BIB_IMAGE,
                 "--type", "ami",
                 "--local",
+                # COMMENT OUT THE FOLLOWING 3 LINES TO BUILD LOCALLY ONLY
                 "--aws-ami-name", "microshift-rhel96-bootc-ami",
                 "--aws-bucket", "microshift-ami-cache-eu-west-1",
                 "--aws-region", "eu-west-1",
