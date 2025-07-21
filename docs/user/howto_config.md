@@ -28,6 +28,24 @@ dns:
     baseDomain: ""
 etcd:
     memoryLimitMB: 0
+genericDevicePlugin:
+    devices:
+        - groups:
+            - count: 0
+              paths:
+                - limit: 0
+                  mountPath: ""
+                  path: ""
+                  permissions: ""
+                  readOnly:
+                  type: ""
+              usbs:
+                - product: ""
+                  serial: ""
+                  vendor: ""
+          name: ""
+    domain: ""
+    status: ""
 ingress:
     accessLogging:
         destination:
@@ -151,6 +169,24 @@ dns:
     baseDomain: example.com
 etcd:
     memoryLimitMB: 0
+genericDevicePlugin:
+    devices:
+        - groups:
+            - count: 1
+              paths:
+                - limit: 1
+                  mountPath: /dev/ttyACM0
+                  path: /dev/ttyACM0
+                  permissions: mrw
+                  readOnly: false
+                  type: Device
+              usbs:
+                - product: ""
+                  serial: ""
+                  vendor: ""
+          name: serial
+    domain: device.microshift.io
+    status: Disabled
 ingress:
     accessLogging:
         destination:

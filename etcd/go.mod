@@ -12,28 +12,32 @@ replace (
 
 require (
 	github.com/openshift/api v0.0.0-20250213010142-f5b09d13c01f
-	github.com/openshift/build-machinery-go v0.0.0-20250211133638-a00a772ae1a2
+	github.com/openshift/build-machinery-go v0.0.0-20250602125535-1b6d00b8c37c
 	github.com/spf13/cobra v1.8.1
 	go.etcd.io/etcd/server/v3 v3.5.16
-	k8s.io/apimachinery v1.32.5
-	k8s.io/cli-runtime v1.32.5
-	k8s.io/component-base v1.32.5
+	k8s.io/apimachinery v1.32.6
+	k8s.io/cli-runtime v1.32.6
+	k8s.io/component-base v1.32.6
 	k8s.io/klog/v2 v2.130.1
-	k8s.io/kubectl v1.32.5
+	k8s.io/kubectl v1.32.6
 	sigs.k8s.io/yaml v1.4.0
 )
 
 require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
+	github.com/go-kit/kit v0.9.0 // indirect
+	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.25.1 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/oklog/run v1.1.0 // indirect
 	github.com/openshift/library-go v0.0.0-20250217144305-c917e6d528b2 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/squat/generic-device-plugin v0.0.0-20250710162141-0f7fddf166f1 // indirect
 	github.com/vishvananda/netlink v1.3.1-0.20250206174618-62fb240731fa // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -43,7 +47,8 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20250115164207-1a7da9e5054f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250115164207-1a7da9e5054f // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
-	k8s.io/apiserver v1.32.5 // indirect
+	k8s.io/apiserver v1.32.6 // indirect
+	k8s.io/kubelet v1.32.6 // indirect
 )
 
 require (
@@ -132,8 +137,8 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/api v1.32.5 // indirect
-	k8s.io/client-go v1.32.5 // indirect
+	k8s.io/api v1.32.6 // indirect
+	k8s.io/client-go v1.32.6 // indirect
 	k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f // indirect
 	k8s.io/utils v0.0.0-20241210054802-24370beab758 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect

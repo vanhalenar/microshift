@@ -16,6 +16,7 @@ import (
 	"github.com/openshift/microshift/pkg/admin/prerun"
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/controllers"
+	"github.com/openshift/microshift/pkg/gdp"
 	"github.com/openshift/microshift/pkg/kustomize"
 	"github.com/openshift/microshift/pkg/loadbalancerservice"
 	"github.com/openshift/microshift/pkg/mdns"
@@ -214,10 +215,11 @@ func RunMicroshift(cfg *config.Config) error {
 	util.Must(m.AddService(controllers.NewKubeStorageVersionMigrator(cfg)))
 	util.Must(m.AddService(controllers.NewClusterID(cfg)))
 	util.Must(m.AddService(controllers.NewTelemetryManager(cfg)))
+	util.Must(m.AddService(gdp.NewGenericDevicePlugin(cfg)))
 
 	// Storing and clearing the env, so other components don't send the READY=1 until MicroShift is fully ready
 	notifySocket := os.Getenv("NOTIFY_SOCKET")
-	os.Unsetenv("NOTIFY_SOCKET")
+	_ = os.Unsetenv("NOTIFY_SOCKET")
 
 	startRec.ServicesStart(microshiftStart)
 
@@ -263,7 +265,7 @@ func RunMicroshift(cfg *config.Config) error {
 	case <-ready:
 		startRec.MicroshiftReady()
 
-		os.Setenv("NOTIFY_SOCKET", notifySocket)
+		_ = os.Setenv("NOTIFY_SOCKET", notifySocket)
 		if supported, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
 			klog.Warningf("error sending sd_notify readiness message: %v", err)
 		} else if supported {

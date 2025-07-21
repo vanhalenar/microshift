@@ -10,7 +10,7 @@ require (
 	github.com/google/go-cmp v0.6.0
 	github.com/miekg/dns v1.1.63 // microshift
 	github.com/openshift/api v0.0.0-20250213010142-f5b09d13c01f
-	github.com/openshift/build-machinery-go v0.0.0-20250211133638-a00a772ae1a2
+	github.com/openshift/build-machinery-go v0.0.0-20250602125535-1b6d00b8c37c
 	github.com/openshift/client-go v0.0.0-20250131180035-f7ec47e2d87a
 	github.com/openshift/cluster-policy-controller v0.0.0-20250310152427-748524784686
 	github.com/openshift/library-go v0.0.0-20250217144305-c917e6d528b2
@@ -31,23 +31,26 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/evanphx/json-patch v4.12.0+incompatible
 	github.com/fsnotify/fsnotify v1.8.0
+	github.com/go-kit/kit v0.9.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/snappy v0.0.4
-	github.com/openshift/route-controller-manager v0.0.0-20241218160919-bc97534a12a7
+	github.com/openshift/route-controller-manager v0.0.0-20250709131101-e148fabc13f7
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.62.0
 	github.com/prometheus/prometheus v0.302.1
+	github.com/squat/generic-device-plugin v0.0.0-20250710162141-0f7fddf166f1
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v1.32.5
-	k8s.io/apiextensions-apiserver v1.32.5
-	k8s.io/apimachinery v1.32.5
-	k8s.io/apiserver v1.32.5
-	k8s.io/cli-runtime v1.32.5
-	k8s.io/client-go v1.32.5
-	k8s.io/cloud-provider v1.32.5
-	k8s.io/component-base v1.32.5
-	k8s.io/kube-aggregator v1.32.5
-	k8s.io/kubectl v1.32.5
+	k8s.io/api v1.32.6
+	k8s.io/apiextensions-apiserver v1.32.6
+	k8s.io/apimachinery v1.32.6
+	k8s.io/apiserver v1.32.6
+	k8s.io/cli-runtime v1.32.6
+	k8s.io/client-go v1.32.6
+	k8s.io/cloud-provider v1.32.6
+	k8s.io/component-base v1.32.6
+	k8s.io/kube-aggregator v1.32.6
+	k8s.io/kubectl v1.32.6
+	k8s.io/kubelet v1.32.6
 	k8s.io/utils v0.0.0-20241210054802-24370beab758
 	sigs.k8s.io/kube-storage-version-migrator v0.0.6-0.20230721195810-5c8923c5ff96
 	sigs.k8s.io/kustomize/api v0.18.0
@@ -61,7 +64,7 @@ require (
 	github.com/JeffAshton/win_pdh v0.0.0-20161109143554-76bb4ee9f0ab // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/Microsoft/hnslib v0.0.8 // indirect
+	github.com/Microsoft/hnslib v0.1.1 // indirect
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/armon/circbuf v0.0.0-20190214190532-5111143e8da2 // indirect
@@ -85,8 +88,15 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.4 // indirect
 	github.com/go-ldap/ldap/v3 v3.4.3 // indirect
+	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-openapi/jsonpointer v0.21.0 // indirect
+	github.com/go-openapi/jsonreference v0.21.0 // indirect
+	github.com/go-openapi/swag v0.23.0 // indirect
+	github.com/go-stack/stack v1.8.1 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	github.com/google/cadvisor v0.51.0 // indirect
 	github.com/google/cel-go v0.22.0 // indirect
@@ -112,6 +122,7 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/oklog/run v1.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/runc v1.2.1 // indirect
 	github.com/opencontainers/runtime-spec v1.2.0 // indirect
@@ -119,6 +130,9 @@ require (
 	github.com/openshift/apiserver-library-go v0.0.0-20250127121756-dc9a973f14ce // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pquerna/cachecontrol v0.1.0 // indirect
+	github.com/prometheus/client_golang v1.21.0-rc.0 // indirect
+	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/robfig/cron v1.2.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect
@@ -146,22 +160,21 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
-	k8s.io/cluster-bootstrap v1.32.5 // indirect
-	k8s.io/component-helpers v1.32.5 // indirect
-	k8s.io/controller-manager v1.32.5 // indirect
-	k8s.io/cri-api v1.32.5 // indirect
-	k8s.io/cri-client v1.32.5 // indirect
-	k8s.io/csi-translation-lib v1.32.5 // indirect
-	k8s.io/dynamic-resource-allocation v1.32.5 // indirect
-	k8s.io/endpointslice v1.32.5 // indirect
-	k8s.io/externaljwt v1.32.5 // indirect
-	k8s.io/kms v1.32.5 // indirect
-	k8s.io/kube-controller-manager v1.32.5 // indirect
-	k8s.io/kube-scheduler v1.32.5 // indirect
-	k8s.io/kubelet v1.32.5 // indirect
-	k8s.io/metrics v1.32.5 // indirect
-	k8s.io/mount-utils v1.32.5 // indirect
-	k8s.io/pod-security-admission v1.32.5 // indirect
+	k8s.io/cluster-bootstrap v1.32.6 // indirect
+	k8s.io/component-helpers v1.32.6 // indirect
+	k8s.io/controller-manager v1.32.6 // indirect
+	k8s.io/cri-api v1.32.6 // indirect
+	k8s.io/cri-client v1.32.6 // indirect
+	k8s.io/csi-translation-lib v1.32.6 // indirect
+	k8s.io/dynamic-resource-allocation v1.32.6 // indirect
+	k8s.io/endpointslice v1.32.6 // indirect
+	k8s.io/externaljwt v1.32.6 // indirect
+	k8s.io/kms v1.32.6 // indirect
+	k8s.io/kube-controller-manager v1.32.6 // indirect
+	k8s.io/kube-scheduler v1.32.6 // indirect
+	k8s.io/metrics v1.32.6 // indirect
+	k8s.io/mount-utils v1.32.6 // indirect
+	k8s.io/pod-security-admission v1.32.6 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.0 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
 )
@@ -174,11 +187,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
-	github.com/go-openapi/jsonpointer v0.21.0 // indirect
-	github.com/go-openapi/jsonreference v0.21.0 // indirect
-	github.com/go-openapi/swag v0.23.0 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc // indirect
@@ -191,9 +199,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/profile v1.7.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.21.0-rc.0 // indirect
-	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/robfig/cron v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.21 // indirect
@@ -210,7 +215,7 @@ require (
 	google.golang.org/protobuf v1.36.4 // indirect
 	k8s.io/gengo/v2 v2.0.0-20240911193312-2b36238f13e9 // indirect
 	k8s.io/klog/v2 v2.130.1
-	k8s.io/kubernetes v1.32.5
+	k8s.io/kubernetes v1.32.6
 	sigs.k8s.io/structured-merge-diff/v4 v4.5.0 // indirect
 )
 
@@ -219,7 +224,7 @@ replace (
 	github.com/openshift/route-controller-manager => ./deps/github.com/openshift/route-controller-manager // deps copy
 	k8s.io/klog/v2 => ./deps/k8s.io/klog // deps clone github.com/kubernetes/klog from kubernetes
 	k8s.io/kubernetes => ./deps/github.com/openshift/kubernetes // deps copy
-	sigs.k8s.io/kube-storage-version-migrator => github.com/openshift/kubernetes-kube-storage-version-migrator v0.0.3-0.20250108152203-4c521b09f4dc // release kube-storage-version-migrator via kubernetes-kube-storage-version-migrator
+	sigs.k8s.io/kube-storage-version-migrator => github.com/openshift/kubernetes-kube-storage-version-migrator v0.0.3-0.20250606130742-2b36e46ab36a // release kube-storage-version-migrator via kubernetes-kube-storage-version-migrator
 )
 
 replace (

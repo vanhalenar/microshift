@@ -5,6 +5,7 @@
     "debugging",
     "dns",
     "etcd",
+    "genericDevicePlugin",
     "ingress",
     "kubelet",
     "manifests",
@@ -156,6 +157,140 @@
           "description": "Set a memory limit on the etcd process; etcd will begin paging\nmemory when it gets to this value. 0 means no limit.",
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "genericDevicePlugin": {
+      "type": "object",
+      "required": [
+        "devices",
+        "domain",
+        "status"
+      ],
+      "properties": {
+        "devices": {
+          "description": "Devices configuration",
+          "type": "array",
+          "items": {
+            "description": "DeviceSpec defines a device that should be discovered and scheduled.\nDeviceSpec allows multiple host devices to be selected and scheduled fungibly under the same name.\nFurthermore, host devices can be composed into groups of device nodes that should be scheduled\nas an atomic unit.",
+            "type": "object",
+            "required": [
+              "groups",
+              "name"
+            ],
+            "properties": {
+              "groups": {
+                "description": "Groups is a list of groups of devices that should be scheduled under the same name.",
+                "type": "array",
+                "items": {
+                  "description": "Group represents a set of devices that should be grouped and mounted into a container together as one single meta-device.",
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "description": "Count specifies how many times this group can be mounted concurrently.\nWhen unspecified, Count defaults to 1.",
+                      "type": "integer",
+                      "default": 1
+                    },
+                    "paths": {
+                      "description": "'paths' is the list of devices of which the device group consists.\nPaths can be globs, in which case each device matched by the path will be schedulable `Count` times.\nWhen the paths have differing cardinalities, that is, the globs match different numbers of devices,\nthe cardinality of each path is capped at the lowest cardinality.\n'paths' is exclusive with 'usbs'.",
+                      "type": "array",
+                      "items": {
+                        "description": "Path represents a file path that should be discovered.",
+                        "type": "object",
+                        "required": [
+                          "path"
+                        ],
+                        "properties": {
+                          "limit": {
+                            "description": "Limit specifies up to how many times this device can be used in the group concurrently when other devices\nin the group yield more matches.\nFor example, if one path in the group matches 5 devices and another matches 1 device but has a limit of 10,\nthen the group will provide 5 pairs of devices.\nWhen unspecified, Limit defaults to 1.",
+                            "type": "integer",
+                            "default": 1
+                          },
+                          "mountPath": {
+                            "description": "MountPath is the file path at which the host device should be mounted within the container.\nWhen unspecified, MountPath defaults to the Path.",
+                            "type": "string",
+                            "default": "/dev/ttyACM0"
+                          },
+                          "path": {
+                            "description": "Path is the file path of a device in the host.",
+                            "type": "string",
+                            "default": "/dev/ttyACM0"
+                          },
+                          "permissions": {
+                            "description": "Permissions is the file-system permissions given to the mounted device.\nPermissions apply only to mounts of type `Device`.\nThis can be one or more of:\n* r - allows the container to read from the specified device.\n* w - allows the container to write to the specified device.\n* m - allows the container to create device files that do not yet exist.\nWhen unspecified, Permissions defaults to mrw.",
+                            "type": "string",
+                            "default": "mrw"
+                          },
+                          "readOnly": {
+                            "description": "ReadOnly specifies whether the path should be mounted read-only.\nReadOnly applies only to mounts of type `Mount`.",
+                            "type": "boolean",
+                            "default": false
+                          },
+                          "type": {
+                            "description": "Type describes what type of file-system node this Path represents and thus how it should be mounted.\nAllowed values: \"Device\", \"Mount\". When unspecified, type defaults to Device.",
+                            "type": "string",
+                            "default": "Device",
+                            "enum": [
+                              "Device",
+                              "Mount",
+                              ""
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "usbs": {
+                      "description": "'usbs' is the list of USB specifications that this device group consists of.\nA USB device must match exactly on all the given attributes to pass.\n'usbs' is exclusive with 'paths'.",
+                      "type": "array",
+                      "items": {
+                        "description": "USBSpec represents a USB device specification that should be discovered.\nA USB device must match exactly on all the given attributes to pass.",
+                        "type": "object",
+                        "required": [
+                          "product",
+                          "serial",
+                          "vendor"
+                        ],
+                        "properties": {
+                          "product": {
+                            "description": "Product is the USB Product ID of the device to match on.\nIt should have the format \"0x0123\" or \"0123\".",
+                            "type": "string"
+                          },
+                          "serial": {
+                            "description": "Serial is the serial number of the device to match on.\nIf specified, it must match exactly.",
+                            "type": "string"
+                          },
+                          "vendor": {
+                            "description": "Vendor is the USB Vendor ID of the device to match on.\nIt should have the format \"0x0123\" or \"0123\".",
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "name": {
+                "description": "Name is a unique string representing the kind of device this specification describes.",
+                "type": "string",
+                "default": "serial"
+              }
+            }
+          }
+        },
+        "domain": {
+          "description": "Domain with which devices will be present in the cluster,\ne.g. device.microshift.io/serial.",
+          "type": "string",
+          "default": "device.microshift.io"
+        },
+        "status": {
+          "description": "Generic Device Plugin status, can be Enabled or Disabled",
+          "type": "string",
+          "default": "Disabled",
+          "enum": [
+            "Enabled",
+            "Disabled",
+            ""
+          ]
         }
       }
     },
@@ -633,7 +768,7 @@
               "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|µs|μs|ms|s|m|h))+)$"
             },
             "maxConnections": {
-              "description": "maxConnections defines the maximum number of simultaneous\nconnections that can be established per HAProxy process.\nIncreasing this value allows each ingress controller pod to\nhandle more connections but at the cost of additional\nsystem resources being consumed.\n\nPermitted values are: empty, 0, -1, and the range\n2000-2000000.\n\nIf this field is empty or 0, the IngressController will use\nthe default value of 50000, but the default is subject to\nchange in future releases.\n\nIf the value is -1 then HAProxy will dynamically compute a\nmaximum value based on the available ulimits in the running\ncontainer. Selecting -1 (i.e., auto) will result in a large\nvalue being computed (~520000 on OpenShift \u003e=4.10 clusters)\nand therefore each HAProxy process will incur significant\nmemory usage compared to the current default of 50000.\n\nSetting a value that is greater than the current operating\nsystem limit will prevent the HAProxy process from\nstarting.\n\nIf you choose a discrete value (e.g., 750000) and the\nrouter pod is migrated to a new node, there's no guarantee\nthat that new node has identical ulimits configured. In\nsuch a scenario the pod would fail to start. If you have\nnodes with different ulimits configured (e.g., different\ntuned profiles) and you choose a discrete value then the\nguidance is to use -1 and let the value be computed\ndynamically at runtime.\n\nYou can monitor memory usage for router containers with the\nfollowing metric:\n'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}'.\n\nYou can monitor memory usage of individual HAProxy\nprocesses in router containers with the following metric:\n'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}/container_processes{container=\"router\",namespace=\"openshift-ingress\"}'.",
+              "description": "maxConnections defines the maximum number of simultaneous\nconnections that can be established per HAProxy process.\nIncreasing this value allows each ingress controller pod to\nhandle more connections but at the cost of additional\nsystem resources being consumed.\n\nPermitted values are: empty, 0, -1, and the range\n2000-2000000.\n\nIf this field is empty or 0, the IngressController will use\nthe default value of 50000, but the default is subject to\nchange in future releases.\n\nIf the value is -1 then HAProxy will dynamically compute a\nmaximum value based on the available ulimits in the running\ncontainer. Selecting -1 (i.e., auto) will result in a large\nvalue being computed (~520000 on OpenShift \u003e=4.10 clusters)\nand therefore each HAProxy process will incur significant\nmemory usage compared to the current default of 50000.\n\nSetting a value that is greater than the current operating\nsystem limit will prevent the HAProxy process from\nstarting.\n\nIf you choose a discrete value (e.g., 750000) and the\nrouter pod is migrated to a new node, there's no guarantee\nthat new node has identical ulimits configured. In\nsuch a scenario the pod would fail to start. If you have\nnodes with different ulimits configured (e.g., different\ntuned profiles) and you choose a discrete value then the\nguidance is to use -1 and let the value be computed\ndynamically at runtime.\n\nYou can monitor memory usage for router containers with the\nfollowing metric:\n'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}'.\n\nYou can monitor memory usage of individual HAProxy\nprocesses in router containers with the following metric:\n'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}/container_processes{container=\"router\",namespace=\"openshift-ingress\"}'.",
               "type": "integer",
               "format": "int32"
             },

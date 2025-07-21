@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/openshift/microshift/pkg/config"
+	"github.com/openshift/microshift/pkg/util"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,7 +16,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
-	deploymentutil "k8s.io/kubectl/pkg/util/deployment"
 )
 
 type NamespaceWorkloads struct {
@@ -34,7 +34,7 @@ func waitForWorkloads(ctx context.Context, timeout time.Duration, workloads map[
 		return fmt.Errorf("failed to create client: %v", err)
 	}
 
-	aeg := &AllErrGroup{}
+	aeg := &util.AllErrGroup{}
 	for ns, wls := range workloads {
 		for _, deploy := range wls.Deployments {
 			aeg.Go(func() error { return waitForDeployment(ctx, client, timeout, ns, deploy) })
@@ -110,10 +110,12 @@ func waitForDeployment(ctx context.Context, client *appsclientv1.AppsV1Client, t
 		if deployment.Generation > deployment.Status.ObservedGeneration {
 			return false, nil
 		}
-		cond := deploymentutil.GetDeploymentCondition(deployment.Status, appsv1.DeploymentProgressing)
-		if cond != nil && cond.Reason == deploymentutil.TimedOutReason {
-			return false, fmt.Errorf("deployment %q exceeded its progress deadline", deployment.Name)
-		}
+		// 'rollout status' command would check the 'Progressing' condition and if the reason is 'ProgressDeadlineExceeded',
+		// it would return an error. We skip it here because:
+		// - a false positive error can happen if the node was offline for more than the Deployment's progress deadline
+		//   and the healthcheck runs before the controller has started progressing the Deployment again.
+		// - we want to give full timeout duration for the Deployment to become ready, no early exits.
+
 		if deployment.Spec.Replicas != nil && deployment.Status.UpdatedReplicas < *deployment.Spec.Replicas {
 			return false, nil
 		}
