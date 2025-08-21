@@ -15,6 +15,8 @@ COPY ./bootc-images/$USHIFT_RPM_REPO_NAME.repo ./bootc-images/microshift-fast-da
 # Install MicroShift optional packages and cleanup.
 RUN dnf repoinfo --enabled && \
     dnf install -y \
+        pciutils \
+        make golang git cmake \
         {{ range (env.Getenv "MICROSHIFT_OPTIONAL_RPMS" | strings.Split " ") -}}
         "{{ . }}-{{ env.Getenv "SOURCE_VERSION" }}" \
         {{ end -}}
@@ -27,6 +29,18 @@ RUN dnf repoinfo --enabled && \
     rm -vf /etc/yum.repos.d/microshift-*.repo && \
     rm -rvf $USHIFT_RPM_REPO_PATH && \
     dnf clean all
+
+WORKDIR /usr/src/
+
+RUN git clone https://github.com/k8snetworkplumbingwg/sriov-cni.git
+
+WORKDIR /usr/src/sriov-cni
+
+RUN mkdir -p /var/roothome
+
+RUN make
+
+RUN cp build/sriov /usr/libexec/cni/
 
 # Prepare system for testing Generic Device Plugin.
 # Upgrade the kernel to keep the same procedure with RHEL and CentOS.

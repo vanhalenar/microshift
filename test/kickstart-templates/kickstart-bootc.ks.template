@@ -5,6 +5,8 @@
 
 %post --log=/dev/console --erroronfail
 
+rpm-ostree kargs --append=intel_iommu=on
+
 %include /post-microshift.cfg
 
 %include /post-containers.cfg

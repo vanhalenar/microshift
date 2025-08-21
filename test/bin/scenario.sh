@@ -680,7 +680,7 @@ launch_vm() {
     for n in ${network}; do
         # For simplicity we assume that network filters are named the same as the networks
         # If there is a filter with the same name as the network, attach it to the NIC
-        vm_network_args+="--network network=${n},model=virtio"
+        vm_network_args+="--network network=${n},model=igb"
         if sudo virsh nwfilter-list | awk '{print $2}' | grep -qx "${n}"; then
             vm_network_args+=",filterref=${n}"
         fi
@@ -735,6 +735,7 @@ launch_vm() {
             --events on_reboot=restart \
             --noreboot \
             ${vm_loc_args} \
+            --iommu intel,driver.intremap=on \
             --extra-args "${vm_extra_args}" \
             ${vm_initrd_inject} \
             --wait ; then
